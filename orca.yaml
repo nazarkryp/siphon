@@ -1,0 +1,8 @@
+scripts:
+  setup: npm install
+
+defaultTabs:
+  - title: Run
+    command: npm run tauri dev
+  - title: Build
+    command: npm run tauri build

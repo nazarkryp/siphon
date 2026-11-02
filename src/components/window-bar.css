@@ -1,0 +1,52 @@
+.window-bar {
+  height: var(--window-bar-height);
+  flex: none;
+  display: flex;
+  align-items: center;
+  background: var(--color-surface-alt);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.window-bar__brand {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding-left: 14px;
+}
+
+/* Clicks on the logo and the name must reach the drag region. */
+.window-bar__brand > * {
+  pointer-events: none;
+}
+
+.window-bar__name {
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+}
+
+.window-bar__button {
+  width: 46px;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-text-body);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.window-bar__button:hover {
+  background: var(--color-hover);
+}
+
+.window-bar__button--close:hover {
+  background: var(--color-pressed);
+}
+
+.window-bar__button:focus-visible {
+  outline-offset: -2px;
+}

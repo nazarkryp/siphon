@@ -1,0 +1,223 @@
+/* Dialog */
+.dialog {
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-deep);
+  width: calc(100vw - 2 * var(--space-8));
+  max-height: calc(100vh - 2 * var(--space-8));
+  overflow: hidden;
+  flex-direction: column;
+}
+
+.dialog[open] {
+  display: flex;
+}
+
+.dialog::backdrop {
+  background: var(--color-backdrop);
+}
+
+.dialog--sm {
+  max-width: 480px;
+}
+
+.dialog--md {
+  max-width: 720px;
+}
+
+.dialog--lg {
+  max-width: 880px;
+}
+
+.dialog__header {
+  height: var(--window-bar-height);
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-2) 0 var(--space-6);
+  background: var(--color-surface-alt);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dialog__title {
+  flex: 1;
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+}
+
+.dialog__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-8);
+}
+
+.dialog__footer {
+  flex: none;
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-8);
+  background: var(--color-surface-alt);
+  border-top: 1px solid var(--color-border);
+}
+
+.dialog__footer .btn--link {
+  color: var(--color-link-strong);
+}
+
+.dialog__footer-info {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-body);
+}
+
+.dialog__footer-error {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--status-failed-fg);
+  white-space: pre-line;
+}
+
+/* Menu */
+.menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 190px;
+  padding: var(--space-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-deep);
+  display: flex;
+  flex-direction: column;
+}
+
+.menu__item {
+  height: 32px;
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: var(--font-size-md);
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu__item:hover,
+.menu__item:focus {
+  background: var(--color-hover);
+}
+
+.menu__item:focus-visible {
+  outline-offset: -2px;
+}
+
+.menu__item--danger {
+  color: var(--status-failed-fg);
+}
+
+.menu__item--separated {
+  margin-top: var(--space-3);
+  position: relative;
+}
+
+.menu__item--separated::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  left: var(--space-2);
+  right: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+/* Notices */
+.notices {
+  position: fixed;
+  z-index: 30;
+  left: var(--space-8);
+  bottom: calc(var(--status-line-height) + var(--space-5));
+  width: min(420px, calc(100vw - 2 * var(--space-8)));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-deep);
+  font-size: var(--font-size-sm);
+}
+
+.notice--error {
+  border-color: var(--status-failed-border);
+  background: var(--status-failed-soft);
+}
+
+.notice__icon {
+  margin-top: 3px;
+}
+
+.notice--error .notice__icon {
+  color: var(--status-failed-fg);
+}
+
+.notice--info .notice__icon {
+  color: var(--status-done-fg);
+}
+
+.notice__text {
+  flex: 1;
+  min-width: 0;
+  padding-top: 2px;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  color: var(--color-text-body);
+}
+
+/* Shared dialog content */
+.form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+}
+
+.dialog-lead {
+  font-size: var(--font-size-md);
+  color: var(--color-text-body);
+  overflow-wrap: anywhere;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--font-size-md);
+}
+
+.checkbox-row input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--color-accent);
+}

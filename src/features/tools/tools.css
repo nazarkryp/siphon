@@ -1,0 +1,36 @@
+.install-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 420px;
+}
+
+.install-progress__text {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-body);
+}
+
+.install-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--status-failed-fg);
+  overflow-wrap: anywhere;
+}
+
+.install-error .icon {
+  margin-top: 3px;
+}
+
+.install-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  margin-top: var(--space-4);
+}
+
+.install-row > :not(.btn) {
+  flex: 1;
+  min-width: 0;
+}

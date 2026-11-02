@@ -1,0 +1,130 @@
+:root {
+  /* Text */
+  --color-text: rgba(0, 0, 0, 0.95);
+  --color-text-body: #31302e;
+  --color-text-secondary: #615d59;
+  --color-text-muted: #a39e98;
+  --color-on-accent: #ffffff;
+
+  /* Surfaces and lines */
+  --color-surface: #ffffff;
+  --color-surface-alt: #f6f5f4;
+  --color-surface-dark: #31302e;
+  --color-hover: rgba(0, 0, 0, 0.05);
+  --color-pressed: rgba(0, 0, 0, 0.08);
+  --color-border: rgba(0, 0, 0, 0.1);
+  --color-input-border: #dddddd;
+  --color-track: rgba(0, 0, 0, 0.08);
+  --color-backdrop: rgba(49, 48, 46, 0.32);
+
+  /* Brand: the logo gradient. app-icon.svg uses the same values. */
+  --color-brand-start: #2a96ff;
+  --color-brand-end: #005bc0;
+
+  /* Action */
+  --color-accent: #0075de;
+  --color-accent-hover: #005bab;
+  --color-accent-soft: #f2f9ff;
+  --color-accent-selected: #e1effc;
+  --color-link: #0075de;
+  /* Links on grey or tinted surfaces. #0075de fails 4.5:1 there. */
+  --color-link-strong: #005bab;
+  --color-focus: #097fe8;
+  --color-disabled-bg: rgba(0, 0, 0, 0.05);
+  --color-disabled-text: #a39e98;
+
+  /* Status */
+  --status-queued-bg: #f6f5f4;
+  --status-queued-fg: #31302e;
+  --status-downloading-bg: #e1effc;
+  --status-downloading-fg: #005bab;
+  --status-downloading-bar: #0075de;
+  --status-downloading-bar-light: #9ccbf3;
+  --status-paused-bg: #f1ece6;
+  --status-paused-fg: #523410;
+  --status-paused-bar: #a39e98;
+  --status-merging-bg: #efeaf4;
+  --status-merging-fg: #391c57;
+  --status-merging-bar: #391c57;
+  --status-merging-bar-alt: #6d5487;
+  --status-done-bg: #e6f4e9;
+  --status-done-fg: #126b28;
+  --status-done-bar: #1aae39;
+  --status-done-soft: #f3faf4;
+  --status-done-border: rgba(18, 107, 40, 0.35);
+  --status-failed-bg: #fcebdf;
+  --status-failed-fg: #a84400;
+  --status-failed-strong: #7a3200;
+  --status-failed-bar: #dd5b00;
+  --status-failed-soft: #fdf4ee;
+  --status-failed-border: rgba(168, 68, 0, 0.3);
+  --status-needs-ffmpeg-bg: #f6f5f4;
+  --status-needs-ffmpeg-fg: #31302e;
+  --status-needs-ffmpeg-border: rgba(0, 0, 0, 0.1);
+
+  /* Type */
+  --font-sans: "Inter Variable", "Inter", -apple-system, system-ui, "Segoe UI", Helvetica, Arial,
+    sans-serif;
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 22px;
+  --font-size-2xl: 26px;
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.45;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --letter-spacing-label: 0.125px;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 9999px;
+
+  /* Spacing */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 20px;
+  --space-8: 24px;
+  --space-9: 32px;
+  --space-10: 40px;
+
+  /* Sizes */
+  --control-height: 36px;
+  --icon-button-size: 32px;
+  --window-bar-height: 40px;
+  --status-line-height: 32px;
+
+  /* Queue columns, shared by the header and every row */
+  --col-select: 16px;
+  --col-type: 64px;
+  --col-status: 132px;
+  --col-progress: 200px;
+  --col-speed: 84px;
+  --col-eta: 76px;
+  --col-actions: 104px;
+  --col-gap: 16px;
+
+  /* Shadows */
+  --shadow-card: rgba(0, 0, 0, 0.04) 0 4px 18px, rgba(0, 0, 0, 0.027) 0 2px 8px,
+    rgba(0, 0, 0, 0.02) 0 0.8px 3px, rgba(0, 0, 0, 0.01) 0 0.2px 1px;
+  --shadow-deep: rgba(0, 0, 0, 0.01) 0 1px 3px, rgba(0, 0, 0, 0.02) 0 3px 7px,
+    rgba(0, 0, 0, 0.02) 0 7px 15px, rgba(0, 0, 0, 0.04) 0 14px 28px, rgba(0, 0, 0, 0.05) 0 23px 52px;
+  --shadow-thumb: 0 1px 2px rgba(0, 0, 0, 0.2);
+
+  /* Focus */
+  --focus-ring-width: 2px;
+  --focus-ring: var(--focus-ring-width) solid var(--color-focus);
+  --focus-ring-offset: 2px;
+  --focus-field-shadow: 0 0 0 1px var(--color-focus), 0 0 0 4px var(--color-accent-soft);
+
+  --duration-fast: 120ms;
+}
