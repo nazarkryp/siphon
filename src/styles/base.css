@@ -44,6 +44,40 @@ p {
   margin: 0;
 }
 
+input[type="checkbox"] {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  transition: all var(--duration-fast);
+}
+
+input[type="checkbox"]:checked,
+input[type="checkbox"]:indeterminate {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+
+/* The mark: a check, or a dash when only some items are selected. */
+input[type="checkbox"]:checked::after,
+input[type="checkbox"]:indeterminate::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--color-on-accent);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E")
+    center / 11px no-repeat;
+}
+
+input[type="checkbox"]:indeterminate::after {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.5' stroke-linecap='round'%3E%3Cline x1='5' y1='12' x2='19' y2='12'/%3E%3C/svg%3E");
+}
+
 :focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);

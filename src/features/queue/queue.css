@@ -175,13 +175,7 @@
 }
 
 .queue-select input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  border-radius: 2px;
-  accent-color: var(--color-accent);
   cursor: pointer;
-  transition: box-shadow var(--duration-fast);
 }
 
 /* In the header, a 28px halo shows what a click hits, anywhere in the clickable area. */

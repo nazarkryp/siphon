@@ -214,10 +214,3 @@
   gap: var(--space-4);
   font-size: var(--font-size-md);
 }
-
-.checkbox-row input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--color-accent);
-}
