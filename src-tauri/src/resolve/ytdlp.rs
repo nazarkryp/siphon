@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use super::{Choice, name_from};
+use super::{Choice, name_from, plays_everywhere};
 use crate::job::{JobSpec, MediaSource, SourceKind};
 use crate::model::{DownloadKind, Quality, Stream};
 use crate::tools;
@@ -180,6 +180,8 @@ struct Candidate {
     audio: Option<Format>,
     height: u32,
     tbr: f64,
+    container: &'static str,
+    plays_everywhere: bool,
 }
 
 fn from_info(info: Info, input_url: &str) -> Outcome {
@@ -241,24 +243,35 @@ fn from_info(info: Info, input_url: &str) -> Outcome {
         };
         let tbr =
             f.tbr.unwrap_or(0.0) + audio.as_ref().and_then(|a| a.tbr.or(a.abr)).unwrap_or(0.0);
+        let container = container_for(f.ext(), audio.as_ref().map(Format::ext));
+        let acodec = audio
+            .as_ref()
+            .map_or(f.acodec.as_deref(), |a| a.acodec.as_deref());
+        let plays_everywhere = plays_everywhere(
+            container,
+            [f.vcodec.as_deref(), acodec].into_iter().flatten(),
+        );
         candidates.push(Candidate {
             video: f.clone(),
             audio,
             height: f.height.unwrap_or(0),
             tbr,
+            container,
+            plays_everywhere,
         });
     }
     candidates.sort_by(|a, b| b.height.cmp(&a.height).then(b.tbr.total_cmp(&a.tbr)));
-    // One row for each height and container family keeps the list short.
+    // Each height gets at most two rows: the best file that plays everywhere (H.264 + AAC
+    // in MP4) and the best other one (VP9 or AV1, often a higher bitrate or resolution).
     let mut seen = std::collections::HashSet::new();
-    candidates.retain(|c| seen.insert((c.height, c.video.ext() == "webm")));
+    candidates.retain(|c| seen.insert((c.height, c.plays_everywhere)));
     candidates.truncate(MAX_QUALITIES);
 
     let title = info.title.clone().unwrap_or_else(|| "video".into());
     let mut qualities = Vec::new();
     let mut choices = Vec::new();
     for (i, c) in candidates.iter().enumerate() {
-        let container = container_for(c.video.ext(), c.audio.as_ref().map(Format::ext));
+        let container = c.container;
         let label = video_label(&c.video);
         let (vs, va) = c.video.size();
         let (asz, aa) = c
@@ -293,6 +306,7 @@ fn from_info(info: Info, input_url: &str) -> Outcome {
             size_is_estimate: va || aa,
             separate_audio: c.audio.is_some(),
             note: Some(container.to_uppercase()),
+            plays_everywhere: c.plays_everywhere,
         });
         let audio = c
             .audio
@@ -313,13 +327,22 @@ fn from_info(info: Info, input_url: &str) -> Outcome {
         });
     }
 
-    let best_audio = audio_only.iter().max_by(|a, b| {
-        a.abr
-            .or(a.tbr)
-            .unwrap_or(0.0)
-            .total_cmp(&b.abr.or(b.tbr).unwrap_or(0.0))
-    });
-    if let Some(a) = best_audio {
+    // Audio only: the best AAC file (it opens in QuickTime and Music) and the best other one
+    // (usually Opus in WebM), higher bitrate first.
+    let rate = |f: &Format| f.abr.or(f.tbr).unwrap_or(0.0);
+    let audio_plays = |a: &Format| plays_everywhere(a.ext(), a.acodec.as_deref());
+    let mut audio_rows: Vec<&Format> = [true, false]
+        .into_iter()
+        .filter_map(|want| {
+            audio_only
+                .iter()
+                .copied()
+                .filter(|a| audio_plays(a) == want)
+                .max_by(|a, b| rate(a).total_cmp(&rate(b)))
+        })
+        .collect();
+    audio_rows.sort_by(|a, b| rate(b).total_cmp(&rate(a)));
+    for a in audio_rows {
         let (size, approx) = a.size();
         // Audio-only downloads are not remuxed, so the file keeps the source container.
         let ext = a.ext().to_string();
@@ -333,6 +356,7 @@ fn from_info(info: Info, input_url: &str) -> Outcome {
             size_is_estimate: approx,
             separate_audio: false,
             note: Some(ext.to_uppercase()),
+            plays_everywhere: audio_plays(a),
         });
         choices.push(Choice {
             kind: DownloadKind::Ytdlp,
@@ -409,6 +433,7 @@ mod tests {
         {"format_id": "251", "ext": "webm", "url": "https://s/a251", "vcodec": "none", "acodec": "opus", "abr": 140.0, "filesize": 900, "protocol": "https"},
         {"format_id": "18", "ext": "mp4", "url": "https://s/v18", "vcodec": "avc1.42001E", "acodec": "mp4a.40.2", "width": 640, "height": 360, "tbr": 500.0, "filesize_approx": 7500000.0, "protocol": "https"},
         {"format_id": "137", "ext": "mp4", "url": "https://s/v137", "vcodec": "avc1.640028", "acodec": "none", "width": 1920, "height": 1080, "tbr": 4000.0, "filesize": 60000000, "protocol": "https"},
+        {"format_id": "399", "ext": "mp4", "url": "https://s/v399", "vcodec": "av01.0.08M.08", "acodec": "none", "width": 1920, "height": 1080, "tbr": 4500.0, "protocol": "https"},
         {"format_id": "248", "ext": "webm", "url": "https://s/v248", "vcodec": "vp9", "acodec": "none", "width": 1920, "height": 1080, "tbr": 3000.0, "protocol": "https"},
         {"format_id": "dash", "ext": "mp4", "url": "https://s/d", "vcodec": "avc1", "acodec": "none", "height": 2160, "protocol": "http_dash_segments"},
         {"format_id": "hls-720", "ext": "mp4", "url": "https://s/720.m3u8", "vcodec": "avc1", "acodec": "mp4a", "height": 720, "tbr": 2000.0, "protocol": "m3u8_native"}
@@ -426,15 +451,29 @@ mod tests {
         else {
             panic!("expected formats");
         };
-        assert_eq!(summary, "Example: 5 formats.");
+        assert_eq!(summary, "Example: 6 formats.");
         let labels: Vec<_> = stream.qualities.iter().map(|q| q.label.as_str()).collect();
-        assert_eq!(labels, ["1080p", "1080p", "720p", "360p", "Audio only"]);
-        // 1080p MP4 pairs with m4a audio and stays MP4.
-        assert!(stream.qualities[0].separate_audio);
-        assert_eq!(stream.qualities[0].size_bytes, Some(60_001_000));
+        assert_eq!(
+            labels,
+            ["1080p", "1080p", "720p", "360p", "Audio only", "Audio only"]
+        );
+        let plays: Vec<_> = stream
+            .qualities
+            .iter()
+            .map(|q| q.plays_everywhere)
+            .collect();
+        assert_eq!(plays, [false, true, true, true, false, true]);
+        // AV1 has the higher bitrate at 1080p, but it does not hide the H.264 row:
+        // QuickTime on most Macs cannot play AV1.
+        assert!(choices[0].spec.primary.url.ends_with("v399"));
         assert_eq!(choices[0].output_ext.as_deref(), Some("mp4"));
+        // 1080p H.264 pairs with m4a audio and stays MP4.
+        assert!(stream.qualities[1].separate_audio);
+        assert_eq!(stream.qualities[1].size_bytes, Some(60_001_000));
+        assert_eq!(choices[1].output_ext.as_deref(), Some("mp4"));
+        assert!(choices[1].spec.primary.url.ends_with("v137"));
         assert!(
-            choices[0]
+            choices[1]
                 .spec
                 .audio
                 .as_ref()
@@ -446,13 +485,14 @@ mod tests {
             choices[0].spec.primary.headers,
             vec![("User-Agent".to_string(), "UA-X".to_string())]
         );
-        // 1080p WebM pairs with opus audio and stays WebM; its size is unknown.
-        assert_eq!(choices[1].output_ext.as_deref(), Some("webm"));
-        assert_eq!(stream.qualities[1].size_bytes, None);
+        // AV1 has no size from yt-dlp.
+        assert_eq!(stream.qualities[0].size_bytes, None);
         // HLS formats use the HLS engine.
         assert_eq!(choices[2].spec.primary.kind, SourceKind::Hls);
         assert!(stream.qualities[3].size_is_estimate);
+        // Audio only: Opus (140 kbps) first, then AAC, which QuickTime opens.
         assert_eq!(choices[4].output_ext.as_deref(), Some("webm"));
+        assert_eq!(choices[5].output_ext.as_deref(), Some("m4a"));
         assert_eq!(stream.suggested_file_name, "Demo_ part 1.mp4");
     }
 

@@ -227,6 +227,25 @@ pub async fn resolve(
     }
 }
 
+/// True when the default players on every system open the file: QuickTime on macOS,
+/// Films & TV on Windows, phones and TVs. That means H.264 (or HEVC tagged `hvc1`) video
+/// with AAC, MP3 or Dolby audio, in an MP4 or M4A file. VP9, AV1, Opus, WebM and MKV are not:
+/// QuickTime does not open them, and only the newest Macs decode AV1.
+/// `codecs` holds RFC 6381 strings ("avc1.640028", "mp4a.40.2") or yt-dlp names ("h264", "opus").
+pub fn plays_everywhere<'a>(container: &str, codecs: impl IntoIterator<Item = &'a str>) -> bool {
+    const OK: [&str; 9] = [
+        "avc1", "avc3", "h264", "hvc1", "mp4a", "aac", "mp3", "ac-3", "ec-3",
+    ];
+    matches!(
+        container.to_ascii_lowercase().as_str(),
+        "mp4" | "m4a" | "m4v" | "mov"
+    ) && codecs.into_iter().all(|c| {
+        let c = c.trim().to_ascii_lowercase();
+        let family = c.split('.').next().unwrap_or("");
+        c.is_empty() || c == "none" || OK.contains(&family)
+    })
+}
+
 /// A file name from a page title or a URL: "Opening keynote" or "keynote" for ".../keynote/master.m3u8".
 pub fn name_from(hint: Option<&str>, url: &str, ext: &str) -> String {
     const GENERIC: [&str; 7] = [
@@ -274,6 +293,20 @@ pub fn name_from(hint: Option<&str>, url: &str, ext: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn knows_what_plays_everywhere() {
+        assert!(plays_everywhere("mp4", ["avc1.640028", "mp4a.40.2"]));
+        assert!(plays_everywhere("MP4", ["h264", "aac"]));
+        assert!(plays_everywhere("m4a", ["mp4a.40.2"]));
+        assert!(!plays_everywhere("mp4", ["av01.0.08M.08", "mp4a.40.2"]));
+        assert!(!plays_everywhere("mp4", ["avc1.640028", "opus"]));
+        assert!(!plays_everywhere("mp4", ["hev1.1.6.L93.B0"]));
+        assert!(!plays_everywhere("webm", ["vp9", "opus"]));
+        assert!(!plays_everywhere("mkv", ["avc1", "mp4a"]));
+        // Unknown codecs count as fine; the container decides.
+        assert!(plays_everywhere("mp4", []));
+    }
 
     #[test]
     fn validates_links() {

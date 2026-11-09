@@ -90,6 +90,8 @@ export interface Quality {
   /** True when video and audio download separately and ffmpeg merges them. */
   separateAudio: boolean;
   note: string | null;
+  /** The saved file opens in the default players everywhere: H.264/AAC in MP4. False for WebM, MKV, VP9, AV1 and Opus, which QuickTime cannot open. */
+  playsEverywhere: boolean;
 }
 
 export interface Stream {

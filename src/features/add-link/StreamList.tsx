@@ -2,6 +2,14 @@ import type { Quality, Stream } from "../../api";
 import { KindBadge } from "../../components/KindBadge";
 import { formatBitrate, formatDuration, formatSize } from "../../lib/format";
 
+/** The quality selected at first: the best one that plays in QuickTime and Films & TV, else the best. */
+export function defaultQuality(stream: Stream): Quality | undefined {
+  return stream.qualities.find((q) => q.playsEverywhere) ?? stream.qualities[0];
+}
+
+const LIMITED_PLAYERS =
+  "QuickTime on macOS and Films & TV on Windows cannot open this file. VLC and IINA can.";
+
 function streamHint(stream: Stream): string {
   const parts: string[] = [];
   const { qualities } = stream;
@@ -51,6 +59,11 @@ function QualityTable({
             {quality.note && stream.qualities.length > 1 && (
               <span className="quality-row__note">{quality.note}</span>
             )}
+            {!quality.playsEverywhere && (
+              <span className="quality-row__note" title={LIMITED_PLAYERS}>
+                Not for QuickTime
+              </span>
+            )}
           </span>
           <span className="num">{quality.resolution ?? "—"}</span>
           <span className="quality-row__codecs" title={quality.codecs ?? undefined}>
@@ -85,12 +98,12 @@ export function StreamList({
     <fieldset className="stream-list">
       <legend className="stream-list__legend">
         <span className="field-label">Choose a stream</span>
-        <span className="field-hint">Best quality is selected</span>
+        <span className="field-hint">The best quality that plays everywhere is selected</span>
       </legend>
       <div className="stream-list__items">
         {streams.map((stream) => {
           const selected = stream.id === streamId;
-          const best = stream.qualities[0];
+          const best = defaultQuality(stream);
           return (
             <div key={stream.id} className={selected ? "stream stream--selected" : "stream"}>
               <label className="stream__main">

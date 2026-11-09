@@ -9,7 +9,7 @@ import { formatBytes, formatSize } from "../../lib/format";
 import { useAppData, useStore } from "../../state/store";
 import { NoStreamPanel, ResolveErrorPanel } from "./NoStreamPanel";
 import { ResolveSteps, scanLog } from "./ResolveSteps";
-import { StreamList } from "./StreamList";
+import { StreamList, defaultQuality } from "./StreamList";
 import "./add-link.css";
 
 type Phase =
@@ -57,7 +57,7 @@ export function AddLinkDialog({ url, onClose, onAdded }: AddLinkDialogProps) {
 
   function selectStream(next: Stream) {
     setStreamId(next.id);
-    setQualityId(next.qualities[0]?.id ?? null);
+    setQualityId(defaultQuality(next)?.id ?? null);
     setFileName(next.suggestedFileName);
   }
 

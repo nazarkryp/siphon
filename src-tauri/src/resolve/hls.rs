@@ -50,6 +50,7 @@ pub async fn resolve(
             size_is_estimate: false,
             separate_audio: false,
             note: None,
+            plays_everywhere: true,
         };
         let choice = Choice {
             kind: DownloadKind::Hls,
@@ -153,6 +154,10 @@ async fn from_master(
             size_is_estimate: true,
             separate_audio,
             note: None,
+            plays_everywhere: super::plays_everywhere(
+                "mp4",
+                v.codecs.as_deref().unwrap_or("").split(','),
+            ),
         });
         let audio = l.audio_url.as_ref().map(|(u, n)| MediaSource {
             kind: SourceKind::Hls,

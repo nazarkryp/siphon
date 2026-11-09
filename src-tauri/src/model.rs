@@ -125,6 +125,8 @@ pub struct Quality {
     pub size_is_estimate: bool,
     pub separate_audio: bool,
     pub note: Option<String>,
+    /// The saved file opens in the default players everywhere (QuickTime, Films & TV).
+    pub plays_everywhere: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -98,6 +98,8 @@ pub fn classify(
             size_is_estimate: false,
             separate_audio: false,
             note: (!ranged).then(|| "The server allows only one connection.".to_string()),
+            // The file is saved as the server sends it; Siphon has no other version to offer.
+            plays_everywhere: true,
         }],
         suggested_file_name: name,
     };
