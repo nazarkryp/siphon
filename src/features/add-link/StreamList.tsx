@@ -2,9 +2,9 @@ import type { Quality, Stream } from "../../api";
 import { KindBadge } from "../../components/KindBadge";
 import { formatBitrate, formatDuration, formatSize } from "../../lib/format";
 
-/** The quality selected at first: the best one that plays in QuickTime and Films & TV, else the best. */
+/** The quality selected at first: the best available one (the list is sorted best first). */
 export function defaultQuality(stream: Stream): Quality | undefined {
-  return stream.qualities.find((q) => q.playsEverywhere) ?? stream.qualities[0];
+  return stream.qualities[0];
 }
 
 const LIMITED_PLAYERS =
@@ -98,7 +98,7 @@ export function StreamList({
     <fieldset className="stream-list">
       <legend className="stream-list__legend">
         <span className="field-label">Choose a stream</span>
-        <span className="field-hint">The best quality that plays everywhere is selected</span>
+        <span className="field-hint">The best available quality is selected</span>
       </legend>
       <div className="stream-list__items">
         {streams.map((stream) => {
