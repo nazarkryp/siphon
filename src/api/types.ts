@@ -7,6 +7,8 @@ export type DownloadStatus =
   | "downloading"
   | "paused"
   | "merging"
+  /** ffmpeg changes the video to a compatible format (H.264 + AAC in MP4). */
+  | "converting"
   | "done"
   | "failed"
   | "needsFfmpeg";
@@ -92,6 +94,8 @@ export interface Quality {
   note: string | null;
   /** The saved file opens in the default players everywhere: H.264/AAC in MP4. False for WebM, MKV, VP9, AV1 and Opus, which QuickTime cannot open. */
   playsEverywhere: boolean;
+  /** What the default player cannot open: "VP9", "AV1 and Opus", "WebM". Set only on video qualities that Siphon can save in a compatible format; null otherwise. */
+  unsupportedFormat: string | null;
 }
 
 export interface Stream {
@@ -104,6 +108,17 @@ export interface Stream {
   /** Best quality first. Never empty. */
   qualities: Quality[];
   suggestedFileName: string;
+  /** Text subtitles that ffmpeg can add to the video. Empty when the site has none. */
+  subtitles: SubtitleTrack[];
+}
+
+export interface SubtitleTrack {
+  id: string;
+  /** The site's language code, for example `en` or `pt-BR`. */
+  language: string;
+  label: string;
+  /** Made by speech recognition, not by a person. */
+  auto: boolean;
 }
 
 export interface ResolveResult {
@@ -123,6 +138,10 @@ export interface AddRequest {
   folder: string;
   referer: string | null;
   userAgent: string | null;
+  /** A `SubtitleTrack` id of the stream. ffmpeg adds the track to the video. */
+  subtitleId: string | null;
+  /** Save in a compatible format. Used only when the quality has an `unsupportedFormat`. */
+  compatibleFormat: boolean;
 }
 
 export interface AddLinksResult {
@@ -140,6 +159,12 @@ export interface Settings {
   ffmpegPath: string | null;
   ytDlpPath: string | null;
   clipboardWatch: boolean;
+  /** Resolve copied video-site links before the user clicks Add. */
+  smartPrefetch: boolean;
+  /** Use the uploader's English title (YouTube) when the video has one. */
+  englishTitles: boolean;
+  /** Default of the "Save in a compatible format" checkbox in Add link. */
+  compatibleFormat: boolean;
 }
 
 export interface ToolStatus {
@@ -148,6 +173,8 @@ export interface ToolStatus {
   version: string | null;
   /** A development (nightly or git) build, not a release. */
   devBuild: boolean;
+  /** Siphon has an official build of this tool for this system, so it can install and update it. */
+  installable: boolean;
 }
 
 export interface ToolsStatus {

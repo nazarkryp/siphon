@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::model::{Settings, ToolStatus, ToolsStatus};
 use crate::net::DlError;
+use crate::tools_install::{self, ToolId};
 
 /// A command that does not open a console window on Windows.
 pub fn command(program: &Path) -> Command {
@@ -28,7 +29,16 @@ pub async fn detect(settings: &Settings) -> ToolsStatus {
         detect_one(settings.ffmpeg_path.as_deref(), "ffmpeg", &["-version"]),
         detect_one(settings.yt_dlp_path.as_deref(), "yt-dlp", &["--version"]),
     );
-    ToolsStatus { ffmpeg, yt_dlp }
+    ToolsStatus {
+        ffmpeg: ToolStatus {
+            installable: tools_install::can_install(ToolId::Ffmpeg),
+            ..ffmpeg
+        },
+        yt_dlp: ToolStatus {
+            installable: tools_install::can_install(ToolId::YtDlp),
+            ..yt_dlp
+        },
+    }
 }
 
 async fn detect_one(configured: Option<&str>, name: &str, version_args: &[&str]) -> ToolStatus {
@@ -62,6 +72,7 @@ async fn detect_one(configured: Option<&str>, name: &str, version_args: &[&str])
         path: Some(path.display().to_string()),
         version,
         dev_build,
+        installable: false,
     }
 }
 
@@ -209,19 +220,168 @@ pub async fn run_ffmpeg(
     ))
 }
 
-/// Output arguments that write `out` with copied streams (no re-encode).
-pub fn copy_output_args(out: &Path) -> Vec<String> {
-    let mut args = vec!["-c".to_string(), "copy".to_string()];
+/// How ffmpeg changes the tracks when the user saves a video in a compatible format.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Recode {
+    /// None copies the video track.
+    pub video: Option<VideoEncode>,
+    /// True encodes the audio to AAC. False copies it.
+    pub audio: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VideoEncode {
+    pub encoder: &'static str,
+    /// Bits per second.
+    pub bitrate: u64,
+}
+
+const AAC_BITRATE: &str = "192k";
+
+/// Output arguments that write `out`. Without `recode`, ffmpeg copies the video and the audio.
+/// With `subtitles`, the text subtitle track is converted to the format that the container
+/// accepts.
+pub fn output_args(out: &Path, subtitles: bool, recode: Option<&Recode>) -> Vec<String> {
     let ext = out
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
+    let mut args: Vec<String> = Vec::new();
+    match recode.and_then(|r| r.video.as_ref()) {
+        Some(v) => {
+            let rate = |bits: u64| bits.to_string();
+            args.extend(
+                [
+                    "-c:v",
+                    v.encoder,
+                    "-b:v",
+                    &rate(v.bitrate),
+                    "-maxrate",
+                    &rate(v.bitrate * 3 / 2),
+                    "-bufsize",
+                    &rate(v.bitrate * 2),
+                    "-pix_fmt",
+                    pixel_format(v.encoder),
+                    "-profile:v",
+                    "high",
+                    "-tag:v",
+                    "avc1",
+                ]
+                .map(String::from),
+            );
+            if v.encoder == "libx264" {
+                args.extend(["-preset".into(), "fast".into()]);
+            }
+        }
+        None => args.extend(["-c:v".into(), "copy".into()]),
+    }
+    if recode.is_some_and(|r| r.audio) {
+        args.extend(["-c:a", "aac", "-b:a", AAC_BITRATE].map(String::from));
+    } else {
+        args.extend(["-c:a".into(), "copy".into()]);
+    }
+    if subtitles {
+        let subtitle_codec = match ext.as_str() {
+            "mp4" | "m4v" | "mov" => "mov_text",
+            "webm" => "webvtt",
+            _ => "srt",
+        };
+        args.extend(["-c:s".into(), subtitle_codec.into()]);
+    }
     if matches!(ext.as_str(), "mp4" | "m4a" | "mov" | "m4v") {
         args.extend(["-movflags".to_string(), "+faststart".to_string()]);
     }
     args.push(out.display().to_string());
     args
+}
+
+/// 8-bit 4:2:0, which every H.264 player decodes. Hardware encoders take it as `nv12`.
+fn pixel_format(encoder: &str) -> &'static str {
+    if encoder == "libx264" {
+        "yuv420p"
+    } else {
+        "nv12"
+    }
+}
+
+/// H.264 encoders in the order Siphon tries them. A hardware encoder is fast, but it works only
+/// when the computer has the hardware and the ffmpeg build includes the encoder.
+fn h264_encoders() -> &'static [&'static str] {
+    if cfg!(target_os = "macos") {
+        &["h264_videotoolbox", "libx264"]
+    } else if cfg!(windows) {
+        &["h264_nvenc", "h264_qsv", "h264_amf", "libx264"]
+    } else {
+        &["libx264"]
+    }
+}
+
+type EncoderKey = (PathBuf, Option<std::time::SystemTime>);
+
+/// The encoder found for each ffmpeg file. An update of the file changes its time and so the key.
+fn encoder_cache() -> &'static std::sync::Mutex<std::collections::HashMap<EncoderKey, &'static str>>
+{
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<EncoderKey, &'static str>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// The first H.264 encoder that works with this ffmpeg on this computer. A short test encode
+/// checks each one, because ffmpeg lists hardware encoders that the computer cannot use.
+pub async fn h264_encoder(
+    ffmpeg: &Path,
+    cancel: &CancellationToken,
+) -> Result<&'static str, DlError> {
+    let modified = std::fs::metadata(ffmpeg).and_then(|m| m.modified()).ok();
+    let key = (ffmpeg.to_path_buf(), modified);
+    let cached = encoder_cache()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&key)
+        .copied();
+    if let Some(encoder) = cached {
+        return Ok(encoder);
+    }
+    for &encoder in h264_encoders() {
+        let test = command(ffmpeg)
+            .args([
+                "-hide_banner",
+                "-nostdin",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+            ])
+            .arg("color=c=black:s=256x256:r=30:d=1")
+            .args(["-frames:v", "5", "-c:v", encoder, "-pix_fmt"])
+            .arg(pixel_format(encoder))
+            .args(["-f", "null", "-"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let works = tokio::select! {
+            _ = cancel.cancelled() => return Err(DlError::cancelled()),
+            r = tokio::time::timeout(Duration::from_secs(20), test) => {
+                matches!(r, Ok(Ok(status)) if status.success())
+            }
+        };
+        if works {
+            encoder_cache()
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(key, encoder);
+            return Ok(encoder);
+        }
+    }
+    Err(DlError::fatal(
+        "Your ffmpeg cannot make H.264 video.",
+        Some(
+            "Open Settings and click Update in the ffmpeg row to install the release build. Or turn off \"Save in a compatible format\" for this video.",
+        ),
+    ))
 }
 
 #[cfg(test)]
@@ -252,7 +412,83 @@ mod tests {
 
     #[test]
     fn faststart_only_for_mp4_family() {
-        assert!(copy_output_args(Path::new("a.mp4")).contains(&"+faststart".to_string()));
-        assert!(!copy_output_args(Path::new("a.mkv")).contains(&"+faststart".to_string()));
+        assert!(output_args(Path::new("a.mp4"), false, None).contains(&"+faststart".to_string()));
+        assert!(!output_args(Path::new("a.mkv"), false, None).contains(&"+faststart".to_string()));
+    }
+
+    #[test]
+    fn subtitles_get_the_container_format() {
+        let codec = |name: &str| {
+            let args = output_args(Path::new(name), true, None);
+            let i = args.iter().position(|a| a == "-c:s").unwrap();
+            assert!(
+                !args.contains(&"-c".to_string()),
+                "-c copy would override -c:s"
+            );
+            args[i + 1].clone()
+        };
+        assert_eq!(codec("a.mp4"), "mov_text");
+        assert_eq!(codec("a.webm"), "webvtt");
+        assert_eq!(codec("a.mkv"), "srt");
+    }
+
+    fn value_after<'a>(args: &'a [String], flag: &str) -> &'a str {
+        let i = args.iter().position(|a| a == flag).unwrap();
+        &args[i + 1]
+    }
+
+    #[test]
+    fn without_recode_copies_both_tracks() {
+        let args = output_args(Path::new("a.mp4"), false, None);
+        assert_eq!(value_after(&args, "-c:v"), "copy");
+        assert_eq!(value_after(&args, "-c:a"), "copy");
+    }
+
+    #[test]
+    fn recode_changes_only_the_named_tracks() {
+        let video_only = Recode {
+            video: Some(VideoEncode {
+                encoder: "h264_videotoolbox",
+                bitrate: 2_000_000,
+            }),
+            audio: false,
+        };
+        let args = output_args(Path::new("a.mp4"), false, Some(&video_only));
+        assert_eq!(value_after(&args, "-c:v"), "h264_videotoolbox");
+        assert_eq!(value_after(&args, "-b:v"), "2000000");
+        assert_eq!(value_after(&args, "-maxrate"), "3000000");
+        assert_eq!(value_after(&args, "-pix_fmt"), "nv12");
+        assert_eq!(value_after(&args, "-tag:v"), "avc1");
+        assert_eq!(value_after(&args, "-c:a"), "copy");
+        assert!(!args.contains(&"-preset".to_string()));
+
+        let audio_only = Recode {
+            video: None,
+            audio: true,
+        };
+        let args = output_args(Path::new("a.mp4"), true, Some(&audio_only));
+        assert_eq!(value_after(&args, "-c:v"), "copy");
+        assert_eq!(value_after(&args, "-c:a"), "aac");
+        assert_eq!(value_after(&args, "-c:s"), "mov_text");
+        assert_eq!(args.last().unwrap(), "a.mp4");
+    }
+
+    #[test]
+    fn libx264_uses_yuv420p_and_a_preset() {
+        let recode = Recode {
+            video: Some(VideoEncode {
+                encoder: "libx264",
+                bitrate: 1_000_000,
+            }),
+            audio: true,
+        };
+        let args = output_args(Path::new("a.mp4"), false, Some(&recode));
+        assert_eq!(value_after(&args, "-pix_fmt"), "yuv420p");
+        assert_eq!(value_after(&args, "-preset"), "fast");
+    }
+
+    #[test]
+    fn software_encoder_is_the_last_choice() {
+        assert_eq!(h264_encoders().last(), Some(&"libx264"));
     }
 }

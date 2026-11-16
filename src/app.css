@@ -6,6 +6,11 @@
   border: 1px solid var(--color-border);
 }
 
+/* macOS draws the window edge itself (decorations on, titleBarStyle "Overlay"). */
+.app--native-frame {
+  border: 0;
+}
+
 .app-message {
   flex: 1;
   display: flex;

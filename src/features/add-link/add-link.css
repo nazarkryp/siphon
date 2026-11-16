@@ -4,6 +4,11 @@
   gap: 22px;
 }
 
+/* Fits the widest label ("Fetching…" with the spinner), so the link field keeps its width. */
+.add-link__fetch {
+  min-width: 130px;
+}
+
 .add-link__section-title {
   display: block;
   margin-bottom: var(--space-3);
@@ -319,4 +324,18 @@
   .resolve-steps {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+.add-link__check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.add-link__check input {
+  margin: 0;
+  accent-color: var(--color-accent);
 }

@@ -9,6 +9,7 @@ import { OptionsDialog } from "./features/queue/OptionsDialog";
 import { QueueScreen } from "./features/queue/QueueScreen";
 import { RemoveDialog } from "./features/queue/RemoveDialog";
 import { SettingsDialog } from "./features/settings/SettingsDialog";
+import { isMac } from "./lib/platform";
 import { DialogsContext, type DialogRequest } from "./state/dialogs";
 import { StoreProvider, useStore } from "./state/store";
 import "./app.css";
@@ -42,25 +43,32 @@ function LoadGate() {
 
   if (state.load.status === "loading" && !state.settings) {
     return (
-      <div className="app-message" role="status">
-        <SpinnerIcon spin />
-        Loading downloads…
-      </div>
+      <>
+        <WindowBar />
+        <div className="app-message" role="status">
+          <SpinnerIcon spin />
+          Loading downloads…
+        </div>
+      </>
     );
   }
   if (state.load.status === "error") {
     return (
-      <div className="app-message" role="alert">
-        <AlertCircleIcon size="lg" className="app-message__icon" />
-        <h1 className="app-message__title">Siphon could not load its state</h1>
-        <p className="app-message__text selectable">{state.load.message}</p>
-        <Button variant="primary" onClick={reload}>
-          Try again
-        </Button>
-      </div>
+      <>
+        <WindowBar />
+        <div className="app-message" role="alert">
+          <AlertCircleIcon size="lg" className="app-message__icon" />
+          <h1 className="app-message__title">Siphon could not load its state</h1>
+          <p className="app-message__text selectable">{state.load.message}</p>
+          <Button variant="primary" onClick={reload}>
+            Try again
+          </Button>
+        </div>
+      </>
     );
   }
 
+  // The queue screen renders its own WindowBar, because the link form sits in it.
   return (
     <DialogsContext.Provider value={dialogs}>
       <QueueScreen />
@@ -73,8 +81,7 @@ function LoadGate() {
 export default function App() {
   return (
     <StoreProvider>
-      <div className="app">
-        <WindowBar />
+      <div className={isMac ? "app app--native-frame" : "app"}>
         <LoadGate />
         <Notices />
       </div>

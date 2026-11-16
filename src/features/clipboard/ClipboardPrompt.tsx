@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { api } from "../../api";
 import { Button } from "../../components/Button";
 import { ClipboardIcon } from "../../components/icons";
 import { describeLink } from "../../lib/links";
@@ -34,7 +35,14 @@ export function ClipboardPrompt() {
         </div>
       </div>
       <div className="clipboard-prompt__actions">
-        <Button onClick={hide}>Ignore</Button>
+        <Button
+          onClick={() => {
+            hide();
+            void api.cancelPrefetch();
+          }}
+        >
+          Ignore
+        </Button>
         <Button
           variant="primary"
           onClick={() => {

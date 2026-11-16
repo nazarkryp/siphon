@@ -1,10 +1,12 @@
 import { useCallback } from "react";
 import { api, type ToolId } from "../../api";
 import { errorMessage } from "../../lib/errors";
+import { isWindows } from "../../lib/platform";
 import { useNotify, useStore } from "../../state/store";
 
 export const TOOL_INFO: Record<ToolId, { name: string; size: string }> = {
-  ffmpeg: { name: "ffmpeg", size: "≈ 115 MB" },
+  // gyan.dev ships ffmpeg and ffprobe in one zip. martin-riedl.de ships ffmpeg alone.
+  ffmpeg: { name: "ffmpeg", size: isWindows ? "≈ 115 MB" : "≈ 30 MB" },
   ytDlp: { name: "yt-dlp", size: "≈ 18 MB" },
 };
 

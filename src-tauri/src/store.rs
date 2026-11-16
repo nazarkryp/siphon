@@ -19,6 +19,9 @@ pub fn default_settings(download_folder: PathBuf) -> Settings {
         ffmpeg_path: None,
         yt_dlp_path: None,
         clipboard_watch: true,
+        smart_prefetch: true,
+        english_titles: false,
+        compatible_format: true,
     }
 }
 
@@ -34,7 +37,7 @@ pub fn load_downloads(dir: &Path) -> Vec<StoredDownload> {
     for d in &mut list {
         if matches!(
             d.view.status,
-            DownloadStatus::Downloading | DownloadStatus::Merging
+            DownloadStatus::Downloading | DownloadStatus::Merging | DownloadStatus::Converting
         ) {
             d.view.status = DownloadStatus::Paused;
         }

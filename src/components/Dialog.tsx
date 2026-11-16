@@ -7,6 +7,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { isMac } from "../lib/platform";
 import { IconButton } from "./IconButton";
 import { CloseIcon } from "./icons";
 
@@ -23,13 +24,19 @@ interface DialogProps {
   initialFocusRef?: RefObject<HTMLElement | null>;
 }
 
-/** Modal dialog. Esc and the Close button call onClose. Focus goes back to the opener. */
+/**
+ * Modal dialog. Esc and the Close button call onClose. Focus goes back to the opener.
+ * On macOS a dialog with a footer is a sheet: it hangs from the window bar, has no Close button
+ * (Esc and the footer's Cancel close it, as in native macOS sheets) and shows the title in the body.
+ */
 export function Dialog({ title, onClose, children, footer, size = "md", initialFocusRef }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const onCloseRef = useRef(onClose);
   const initialFocus = useRef(initialFocusRef);
   const unmounted = useRef(false);
+  // A dialog without a footer has no Cancel button, so it keeps the header with the Close button.
+  const sheet = isMac && footer != null;
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -73,7 +80,7 @@ export function Dialog({ title, onClose, children, footer, size = "md", initialF
   return (
     <dialog
       ref={ref}
-      className={`dialog dialog--${size}`}
+      className={`dialog dialog--${size}${sheet ? " dialog--sheet" : ""}`}
       aria-labelledby={titleId}
       onKeyDown={onKeyDown}
       onCancel={(event) => {
@@ -85,13 +92,22 @@ export function Dialog({ title, onClose, children, footer, size = "md", initialF
         if (!unmounted.current && !event.currentTarget.open) onCloseRef.current();
       }}
     >
-      <header className="dialog__header">
-        <h2 className="dialog__title" id={titleId}>
-          {title}
-        </h2>
-        <IconButton label="Close" icon={<CloseIcon />} onClick={() => onCloseRef.current()} />
-      </header>
-      <div className="dialog__body">{children}</div>
+      {!sheet && (
+        <header className="dialog__header">
+          <h2 className="dialog__title" id={titleId}>
+            {title}
+          </h2>
+          <IconButton label="Close" icon={<CloseIcon />} onClick={() => onCloseRef.current()} />
+        </header>
+      )}
+      <div className="dialog__body">
+        {sheet && (
+          <h2 className="dialog__title dialog__title--body" id={titleId}>
+            {title}
+          </h2>
+        )}
+        {children}
+      </div>
       {footer && <footer className="dialog__footer">{footer}</footer>}
     </dialog>
   );

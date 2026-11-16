@@ -100,8 +100,10 @@ pub fn classify(
             note: (!ranged).then(|| "The server allows only one connection.".to_string()),
             // The file is saved as the server sends it; Siphon has no other version to offer.
             plays_everywhere: true,
+            unsupported_format: None,
         }],
         suggested_file_name: name,
+        subtitles: Vec::new(),
     };
     let choice = Choice {
         kind: DownloadKind::File,
@@ -114,11 +116,15 @@ pub fn classify(
                 size_hint: total,
             },
             audio: None,
+            subtitle: None,
             duration: None,
             encrypted: false,
+            convert: None,
         },
         quality_label: None,
         output_ext: None,
+        subtitles: Vec::new(),
+        convert: None,
     };
     Outcome::File {
         stream,

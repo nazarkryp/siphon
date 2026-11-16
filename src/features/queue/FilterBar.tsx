@@ -11,7 +11,9 @@ export function FilterBar() {
   const { settings } = useAppData();
   const { downloads, filter } = state;
   const counts = countByFilter(downloads);
-  const busy = downloads.filter((d) => d.status === "downloading" || d.status === "merging").length;
+  const busy = downloads.filter(
+    (d) => d.status === "downloading" || d.status === "merging" || d.status === "converting",
+  ).length;
   const totalSpeed = downloads.reduce((sum, d) => sum + d.speed, 0);
 
   return (

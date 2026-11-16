@@ -67,6 +67,64 @@
   border-top: 1px solid var(--color-border);
 }
 
+/* macOS sheet: hangs from the bottom edge of the window bar, which stays visible and undimmed.
+   No grey bands; the title sits in the body and the buttons sit on white. */
+.dialog--sheet {
+  margin: var(--window-toolbar-height) auto auto;
+  max-height: calc(100vh - var(--window-toolbar-height) - var(--space-8));
+  border-top: 0;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  box-shadow: var(--shadow-sheet);
+  animation: sheet-in var(--duration-sheet) var(--ease-out) both;
+}
+
+.dialog--sheet::backdrop {
+  top: var(--window-toolbar-height);
+  background: var(--color-backdrop-sheet);
+}
+
+.dialog__title--body {
+  margin-bottom: var(--space-7);
+  font-size: var(--font-size-lg);
+}
+
+.dialog--sheet .dialog__body {
+  padding-bottom: var(--space-6);
+}
+
+.dialog--sheet .dialog__footer {
+  min-height: 0;
+  padding: var(--space-6) var(--space-8) var(--space-8);
+  background: var(--color-surface);
+}
+
+/* The dialog is in the top layer, above the window bar. The clip hides the part that is still
+   above the bar's bottom edge, so the sheet seems to slide out from under the bar. The clip uses
+   the same timing as the move, so its edge stays on the bar. At the end, the clip leaves room
+   for the shadow. */
+@keyframes sheet-in {
+  from {
+    transform: translateY(-100%);
+    clip-path: inset(100% 0 0 0);
+  }
+  to {
+    transform: none;
+    clip-path: inset(0 -80px -80px -80px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog--sheet {
+    animation-name: sheet-fade-in;
+  }
+}
+
+@keyframes sheet-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
 .dialog__footer .btn--link {
   color: var(--color-link-strong);
 }

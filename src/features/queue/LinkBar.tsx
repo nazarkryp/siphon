@@ -14,7 +14,10 @@ interface Message {
   details?: string[];
 }
 
-export function LinkBar() {
+export type LinkBarState = ReturnType<typeof useLinkBar>;
+
+/** The state of the link form. The form sits in the title bar and its message below it. */
+export function useLinkBar() {
   const { dispatch } = useStore();
   const dialogs = useDialogs();
   const [value, setValue] = useState("");
@@ -67,55 +70,65 @@ export function LinkBar() {
     }
   }
 
+  function openSettings() {
+    dialogs.open({ type: "settings" });
+  }
+
+  return { value, setValue, busy, message, setMessage, onPaste, onSubmit, openSettings };
+}
+
+export function LinkForm({ link }: { link: LinkBarState }) {
+  const { value, setValue, busy, message, setMessage, onPaste, onSubmit } = link;
   return (
-    <div className="link-bar">
-      <form className="link-bar__row" onSubmit={onSubmit}>
-        <label className="link-field">
-          <LinkIcon />
-          <span className="sr-only">Links</span>
-          <input
-            type="text"
-            className="link-field__input"
-            placeholder="Paste links — one per line"
-            value={value}
-            spellCheck={false}
-            autoComplete="off"
-            onChange={(event) => {
-              setValue(event.target.value);
-              if (message?.tone === "info") setMessage(null);
-            }}
-            onPaste={onPaste}
-          />
-        </label>
-        <Button type="submit" variant="primary" loading={busy} disabled={value.trim() === ""}>
-          Fetch
-        </Button>
-        <IconButton
-          size="lg"
-          label="Settings"
-          icon={<SettingsIcon />}
-          onClick={() => dialogs.open({ type: "settings" })}
+    <form className="link-form" onSubmit={onSubmit} data-tauri-drag-region>
+      <label className="link-field">
+        <LinkIcon />
+        <span className="sr-only">Links</span>
+        <input
+          type="text"
+          className="link-field__input"
+          placeholder="Paste links — one per line"
+          value={value}
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(event) => {
+            setValue(event.target.value);
+            if (message?.tone === "info") setMessage(null);
+          }}
+          onPaste={onPaste}
         />
-      </form>
-      {message && (
-        <div
-          className={`link-bar__message link-bar__message--${message.tone}`}
-          role={message.tone === "error" ? "alert" : "status"}
-        >
-          {message.tone === "error" ? <AlertCircleIcon size="sm" /> : <CheckCircleIcon size="sm" />}
-          <div className="link-bar__message-text selectable">
-            {message.text}
-            {message.details && (
-              <ul>
-                {message.details.map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <IconButton label="Dismiss" size="sm" icon={<CloseIcon />} onClick={() => setMessage(null)} />
-        </div>
-      )}
+      </label>
+      <Button type="submit" variant="primary" loading={busy} disabled={value.trim() === ""}>
+        Fetch
+      </Button>
+    </form>
+  );
+}
+
+export function SettingsButton({ link }: { link: LinkBarState }) {
+  return <IconButton size="lg" label="Settings" icon={<SettingsIcon />} onClick={link.openSettings} />;
+}
+
+export function LinkMessage({ link }: { link: LinkBarState }) {
+  const { message, setMessage } = link;
+  if (!message) return null;
+  return (
+    <div
+      className={`link-message link-message--${message.tone}`}
+      role={message.tone === "error" ? "alert" : "status"}
+    >
+      {message.tone === "error" ? <AlertCircleIcon size="sm" /> : <CheckCircleIcon size="sm" />}
+      <div className="link-message__text selectable">
+        {message.text}
+        {message.details && (
+          <ul>
+            {message.details.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <IconButton label="Dismiss" size="sm" icon={<CloseIcon />} onClick={() => setMessage(null)} />
     </div>
   );
 }

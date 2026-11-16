@@ -11,10 +11,12 @@ function ToolBanner({
   tool,
   tone,
   title,
+  installable,
   onDismiss,
   children,
 }: {
   tool: ToolId;
+  installable: boolean;
   tone: "warning" | "neutral";
   title?: string;
   onDismiss?: () => void;
@@ -36,13 +38,22 @@ function ToolBanner({
           <Button disabled={installing} onClick={() => dialogs.open({ type: "settings", focus: tool })}>
             Set {name} path
           </Button>
-          <Button variant="primary" loading={installing} onClick={() => void start()}>
-            {install?.status === "failed" ? "Try again" : `Install ${name} (${size})`}
-          </Button>
+          {installable && (
+            <Button variant="primary" loading={installing} onClick={() => void start()}>
+              {install?.status === "failed" ? "Try again" : `Install ${name} (${size})`}
+            </Button>
+          )}
         </>
       }
     >
-      {install ? <InstallProgress tool={tool} install={install} /> : children}
+      {install ? (
+        <InstallProgress tool={tool} install={install} />
+      ) : (
+        <>
+          {children}
+          {!installable && ` Install ${name} with your package manager, then set its path.`}
+        </>
+      )}
     </Banner>
   );
 }
@@ -58,12 +69,16 @@ export function ToolBanners() {
   return (
     <div className="tool-banners">
       {showFfmpeg && (
-        <ToolBanner tool="ffmpeg" tone="warning" title="ffmpeg not found">
+        <ToolBanner tool="ffmpeg" tone="warning" title="ffmpeg not found" installable={tools.ffmpeg.installable}>
           HLS downloads and video + audio downloads can’t start. Direct files still work.
         </ToolBanner>
       )}
       {showYtDlp && (
-        <ToolBanner tool="ytDlp" tone="neutral" onDismiss={() => dispatch({ type: "ytDlpBannerDismissed" })}>
+        <ToolBanner
+          tool="ytDlp"
+          tone="neutral"
+          installable={tools.ytDlp.installable}
+          onDismiss={() => dispatch({ type: "ytDlpBannerDismissed" })}>
           <strong>yt-dlp not found.</strong> Siphon works, but sites that need yt-dlp (for example
           YouTube) will fail.
         </ToolBanner>

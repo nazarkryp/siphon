@@ -5,15 +5,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use futures_util::FutureExt;
+use futures_util::future::{BoxFuture, Shared};
 use reqwest::Client;
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{self, PartSink};
-use crate::job::{MediaSource, PartState, SourceKind, StoredDownload};
+use crate::job::{MediaSource, PartState, SourceKind, StoredDownload, SubtitleSource};
 use crate::model::{
     AddLinksResult, AddRequest, AppState, Download, DownloadError, DownloadStatus, FailedLink,
-    ProgressDetail, ResolveResult, ResolveStepState, Settings, ToolUpdates, ToolsStatus,
+    ProgressDetail, ResolveResult, ResolveStepState, Settings, ToolUpdate, ToolUpdates,
+    ToolsStatus,
 };
 use crate::net::{self, DlError};
 use crate::resolve::{self, Choice};
@@ -98,12 +101,21 @@ struct JobContext {
     ffmpeg: Option<PathBuf>,
 }
 
+/// A resolve that started when the user copied a video-site link.
+struct Prefetch {
+    url: String,
+    at: Instant,
+    result: Shared<BoxFuture<'static, CmdResult<ResolveResult>>>,
+    task: tauri::async_runtime::JoinHandle<()>,
+}
+
 pub struct Core {
     app: AppHandle,
     client: Client,
     data_dir: PathBuf,
     state: Mutex<State>,
     resolves: Mutex<HashMap<String, CachedResolve>>,
+    prefetch: Mutex<Option<Prefetch>>,
     installing: Mutex<HashSet<ToolId>>,
 }
 
@@ -133,22 +145,113 @@ fn temp_output(final_path: &Path) -> PathBuf {
     final_path.with_file_name(format!("{stem}.siphon-tmp{ext}"))
 }
 
-/// Remuxes one input, or merges video from the first input with audio from the second. No re-encode.
-fn ffmpeg_args(video: &Path, audio: Option<&Path>, out: &Path) -> Vec<String> {
+/// Remuxes one input, or merges video from the first input with audio from the second.
+/// A subtitle file becomes one more track. Video and audio are copied, unless `recode` says
+/// to change them to a compatible format.
+fn ffmpeg_args(
+    video: &Path,
+    audio: Option<&Path>,
+    subtitle: Option<(&Path, &SubtitleSource)>,
+    recode: Option<&tools::Recode>,
+    out: &Path,
+) -> Vec<String> {
+    // ffmpeg applies an option to the next file, so all inputs come before the output options.
     let mut args = vec!["-i".to_string(), video.display().to_string()];
+    for path in audio.into_iter().chain(subtitle.map(|(p, _)| p)) {
+        args.extend(["-i".into(), path.display().to_string()]);
+    }
     match audio {
-        Some(a) => args.extend([
-            "-i".into(),
-            a.display().to_string(),
-            "-map".into(),
-            "0:v:0".into(),
-            "-map".into(),
-            "1:a:0".into(),
-        ]),
+        Some(_) => args.extend(["-map".into(), "0:v:0".into(), "-map".into(), "1:a:0".into()]),
         None => args.extend(["-map".into(), "0:v?".into(), "-map".into(), "0:a?".into()]),
     }
-    args.extend(tools::copy_output_args(out));
+    if let Some((_, sub)) = subtitle {
+        let input = if audio.is_some() { 2 } else { 1 };
+        args.extend([
+            "-map".into(),
+            format!("{input}:s:0"),
+            "-metadata:s:s:0".into(),
+            format!("title={}", sub.label),
+        ]);
+        if let Some(lang) = &sub.language {
+            args.extend(["-metadata:s:s:0".into(), format!("language={lang}")]);
+        }
+    }
+    args.extend(tools::output_args(out, subtitle.is_some(), recode));
     args
+}
+
+/// The H.264 bitrate for a converted video. H.264 needs about twice the bitrate of VP9 or AV1
+/// for the same picture. The minimum keeps a low source bitrate from making a blurry file.
+fn h264_bitrate(source: Option<u64>, height: Option<u32>) -> u64 {
+    const MAX: u64 = 20_000_000;
+    let (min, unknown) = match height.filter(|h| *h > 0).unwrap_or(1080) {
+        0..=480 => (800_000, 1_500_000),
+        481..=720 => (1_500_000, 3_000_000),
+        721..=1080 => (2_500_000, 5_000_000),
+        1081..=1440 => (5_000_000, 9_000_000),
+        _ => (8_000_000, 16_000_000),
+    };
+    match source.filter(|b| *b > 0) {
+        Some(b) => (b * 2).clamp(min, MAX),
+        None => unknown,
+    }
+}
+
+/// Subtitle files are small text files. A bigger answer is not a subtitle.
+const MAX_SUBTITLE_BYTES: usize = 20 * 1024 * 1024;
+
+/// Downloads a subtitle file in one request. It is a few kilobytes, so it has no progress.
+async fn fetch_subtitle(
+    client: &reqwest::Client,
+    sub: &SubtitleSource,
+    headers: reqwest::header::HeaderMap,
+    path: &Path,
+    cancel: &CancellationToken,
+) -> Result<(), DlError> {
+    let failed = |reason: String| {
+        DlError::fatal(
+            format!("Siphon could not download the subtitles ({reason})."),
+            Some("Add the link again. To get the video without subtitles, choose None."),
+        )
+    };
+    let request = async {
+        let response = client
+            .get(&sub.url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|e| failed(DlError::from_reqwest(&e).message))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(failed(format!("HTTP {}", status.as_u16())));
+        }
+        if response
+            .content_length()
+            .is_some_and(|n| n > MAX_SUBTITLE_BYTES as u64)
+        {
+            return Err(failed("the file is too big".into()));
+        }
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| failed(DlError::from_reqwest(&e).message))?;
+        if body.len() > MAX_SUBTITLE_BYTES {
+            return Err(failed("the file is too big".into()));
+        }
+        Ok(body)
+    };
+    let body = tokio::select! {
+        _ = cancel.cancelled() => return Err(DlError::cancelled()),
+        r = request => r?,
+    };
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir)
+            .await
+            .map_err(|e| DlError::io(&e))?;
+    }
+    tokio::fs::write(path, &body)
+        .await
+        .map_err(|e| DlError::io(&e))
 }
 
 fn cancelled_error() -> DownloadError {
@@ -195,6 +298,7 @@ impl Core {
                 last_save: Instant::now(),
             }),
             resolves: Mutex::new(HashMap::new()),
+            prefetch: Mutex::new(None),
             installing: Mutex::new(HashSet::new()),
         })
     }
@@ -255,18 +359,27 @@ impl Core {
     /// Reads the newest release of each tool. Siphon compares it with the found version in the UI.
     pub async fn check_tool_updates(&self) -> ToolUpdates {
         let (ffmpeg, yt_dlp) = tokio::join!(
-            tools_install::latest_version(&self.client, ToolId::Ffmpeg),
-            tools_install::latest_version(&self.client, ToolId::YtDlp),
+            self.check_tool_update(ToolId::Ffmpeg),
+            self.check_tool_update(ToolId::YtDlp),
         );
-        ToolUpdates {
-            ffmpeg: ffmpeg.into(),
-            yt_dlp: yt_dlp.into(),
+        ToolUpdates { ffmpeg, yt_dlp }
+    }
+
+    /// A tool that Siphon cannot install on this system gets no release check.
+    async fn check_tool_update(&self, tool: ToolId) -> ToolUpdate {
+        if !tools_install::can_install(tool) {
+            return ToolUpdate {
+                latest: None,
+                error: None,
+            };
         }
+        tools_install::latest_version(&self.client, tool)
+            .await
+            .into()
     }
 
     /// Installs or updates a tool in the app data folder and saves its path in Settings.
     pub async fn install_tool(self: &Arc<Self>, tool: ToolId) -> CmdResult<ToolsStatus> {
-        let asset = tools_install::official_asset(tool)?;
         if !self
             .installing
             .lock()
@@ -283,7 +396,10 @@ impl Core {
         let progress = move |p: tools_install::Progress| {
             let _ = app.emit("tool-install-progress", p);
         };
-        let installed = tools_install::install(&self.client, tool, &asset, &dir, &progress).await;
+        let installed = match tools_install::official_asset(tool).await {
+            Ok(asset) => tools_install::install(&self.client, tool, &asset, &dir, &progress).await,
+            Err(e) => Err(e),
+        };
         self.installing
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -307,13 +423,18 @@ impl Core {
         new.validate()?;
         store::save_settings(&self.data_dir, &new)
             .map_err(|e| format!("Siphon could not save the settings: {e}."))?;
-        let paths_changed = {
+        let (paths_changed, titles_changed) = {
             let mut s = self.lock();
             let changed = s.settings.ffmpeg_path != new.ffmpeg_path
                 || s.settings.yt_dlp_path != new.yt_dlp_path;
+            let titles_changed = s.settings.english_titles != new.english_titles;
             s.settings = new.clone();
-            changed
+            (changed, titles_changed)
         };
+        if titles_changed {
+            // The prefetch asked yt-dlp with the old setting.
+            self.cancel_prefetch();
+        }
         if paths_changed {
             self.detect_tools().await;
         } else {
@@ -324,6 +445,43 @@ impl Core {
 
     // ---- resolving and adding ----
 
+    /// Starts resolving a copied link in the background, so the Add link dialog
+    /// opens without a wait. Only for video sites (some other links work only once)
+    /// and only when yt-dlp is found. A new copy stops the previous prefetch.
+    pub fn prefetch(self: &Arc<Self>, url: &str) {
+        self.cancel_prefetch();
+        let enabled = {
+            let s = self.lock();
+            s.settings.smart_prefetch && s.tools.yt_dlp.found
+        };
+        if !enabled || !resolve::is_video_page(url) {
+            return;
+        }
+        let core = Arc::clone(self);
+        let owned = url.to_string();
+        let result = async move { core.resolve_now(&owned, None, None).await }
+            .boxed()
+            .shared();
+        let task = tauri::async_runtime::spawn(result.clone().map(|_| ()));
+        *self.prefetch_slot() = Some(Prefetch {
+            url: url.to_string(),
+            at: Instant::now(),
+            result,
+            task,
+        });
+    }
+
+    /// Stops the background resolve. Dropping its future kills yt-dlp.
+    pub fn cancel_prefetch(&self) {
+        if let Some(p) = self.prefetch_slot().take() {
+            p.task.abort();
+        }
+    }
+
+    fn prefetch_slot(&self) -> MutexGuard<'_, Option<Prefetch>> {
+        self.prefetch.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     pub async fn resolve_link(
         &self,
         url: &str,
@@ -331,7 +489,33 @@ impl Core {
         user_agent: Option<String>,
     ) -> CmdResult<ResolveResult> {
         let url = resolve::validate_url(url)?;
-        let (yt_dlp, folder) = {
+        let referer = non_empty(referer);
+        let user_agent = non_empty(user_agent);
+        // The prefetch ran without headers, so it fits only a request without them.
+        if referer.is_none() && user_agent.is_none() {
+            let prefetched = self
+                .prefetch_slot()
+                .take_if(|p| p.url == url && p.at.elapsed() < RESOLVE_TTL)
+                .map(|p| p.result);
+            // A failed prefetch can be temporary. Then resolve again.
+            if let Some(Ok(result)) = match prefetched {
+                Some(f) => Some(f.await),
+                None => None,
+            } {
+                return Ok(result);
+            }
+        }
+        self.resolve_now(&url, referer, user_agent).await
+    }
+
+    async fn resolve_now(
+        &self,
+        url: &str,
+        referer: Option<String>,
+        user_agent: Option<String>,
+    ) -> CmdResult<ResolveResult> {
+        let url = url.to_string();
+        let (yt_dlp, folder, english_titles) = {
             let s = self.lock();
             let yt = s
                 .tools
@@ -339,16 +523,19 @@ impl Core {
                 .found
                 .then(|| s.tools.yt_dlp.path.clone().map(PathBuf::from))
                 .flatten();
-            (yt, s.settings.download_folder.clone())
+            (
+                yt,
+                s.settings.download_folder.clone(),
+                s.settings.english_titles,
+            )
         };
-        let referer = non_empty(referer);
-        let user_agent = non_empty(user_agent);
         let mut resolved = resolve::resolve(
             &self.client,
             &url,
             referer.as_deref(),
             user_agent.as_deref(),
             yt_dlp,
+            english_titles,
         )
         .await;
         resolved.result.free_space_bytes = free_space(Path::new(&folder));
@@ -366,7 +553,7 @@ impl Core {
     }
 
     pub fn add_download(self: &Arc<Self>, req: AddRequest) -> CmdResult<Download> {
-        let (choice, source_url) = {
+        let (mut choice, source_url) = {
             let cache = self.resolves.lock().unwrap_or_else(|p| p.into_inner());
             let cached = cache
                 .get(&req.resolve_id)
@@ -378,6 +565,21 @@ impl Core {
                 .ok_or("Choose a stream and a quality.")?;
             (choice, cached.url.clone())
         };
+        if let Some(subtitle_id) = &req.subtitle_id {
+            let source = choice
+                .subtitles
+                .iter()
+                .find(|(id, _)| id == subtitle_id)
+                .map(|(_, s)| s.clone())
+                .ok_or("This quality cannot have subtitles. Choose None or another quality.")?;
+            choice.spec.subtitle = Some(source);
+        }
+        if req.compatible_format
+            && let Some(convert) = choice.convert.take()
+        {
+            choice.spec.convert = Some(convert);
+            choice.output_ext = Some("mp4".into());
+        }
         let folder = req.folder.trim();
         if folder.is_empty() {
             return Err("Choose a folder.".into());
@@ -455,7 +657,8 @@ impl Core {
         let mut added = Vec::new();
         let mut failed = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        let folder = self.settings().download_folder;
+        let settings = self.settings();
+        let folder = settings.download_folder;
         for raw in urls {
             let raw = raw.trim().to_string();
             if raw.is_empty() || !seen.insert(raw.clone()) {
@@ -495,6 +698,8 @@ impl Core {
                 folder: folder.clone(),
                 referer: None,
                 user_agent: None,
+                subtitle_id: None,
+                compatible_format: settings.compatible_format,
             };
             match self.add_download(req) {
                 Ok(view) => added.push(view),
@@ -807,7 +1012,7 @@ impl Core {
         };
         let primary = &ctx.spec.primary;
 
-        if ctx.spec.audio.is_none() && primary.kind == SourceKind::Http {
+        if !ctx.spec.needs_ffmpeg() {
             let part = part_path(&final_path);
             engine::http::download(
                 &self.client,
@@ -857,15 +1062,54 @@ impl Core {
             ),
         };
 
+        let subtitle = match &ctx.spec.subtitle {
+            Some(sub) => {
+                let path = work.join(format!("subtitle.{}", sub.ext));
+                let req_headers = net::request_headers(
+                    &sub.headers,
+                    ctx.referer.as_deref(),
+                    ctx.user_agent.as_deref(),
+                );
+                fetch_subtitle(&self.client, sub, req_headers, &path, cancel).await?;
+                Some((path, sub))
+            }
+            None => None,
+        };
+
         let ffmpeg = ctx.ffmpeg.clone().ok_or_else(|| {
             DlError::fatal(
                 "ffmpeg is missing.",
                 Some("Set the ffmpeg path in Settings, then retry."),
             )
         })?;
-        self.set_merging(id);
+        let recode = match &ctx.spec.convert {
+            Some(c) => Some(tools::Recode {
+                video: match c.video {
+                    true => Some(tools::VideoEncode {
+                        encoder: tools::h264_encoder(&ffmpeg, cancel).await?,
+                        bitrate: h264_bitrate(c.source_bitrate, c.height),
+                    }),
+                    false => None,
+                },
+                audio: c.audio,
+            }),
+            None => None,
+        };
+        self.set_merging(
+            id,
+            match recode {
+                Some(_) => DownloadStatus::Converting,
+                None => DownloadStatus::Merging,
+            },
+        );
         let tmp = temp_output(&final_path);
-        let args = ffmpeg_args(&video, audio.as_deref(), &tmp);
+        let args = ffmpeg_args(
+            &video,
+            audio.as_deref(),
+            subtitle.as_ref().map(|(p, s)| (p.as_path(), *s)),
+            recode.as_ref(),
+            &tmp,
+        );
         let progress_core = self.clone();
         let progress_id = id.to_string();
         let merged = tools::run_ffmpeg(&ffmpeg, &args, ctx.spec.duration, cancel, move |p| {
@@ -958,10 +1202,11 @@ impl Core {
             .to_string())
     }
 
-    fn set_merging(&self, id: &str) {
+    /// `status` is `Merging`, or `Converting` when ffmpeg changes the format.
+    fn set_merging(&self, id: &str, status: DownloadStatus) {
         let mut s = self.lock();
         if let Some(e) = s.entries.iter_mut().find(|e| e.id() == id) {
-            e.stored.view.status = DownloadStatus::Merging;
+            e.stored.view.status = status;
             e.stored.view.speed = 0;
             e.stored.view.eta_seconds = None;
             e.stored.view.merge_progress = Some(0.0);
@@ -1301,7 +1546,7 @@ mod tests {
         let mut last = 0.0;
         tools::run_ffmpeg(
             &ffmpeg,
-            &ffmpeg_args(&out.joined, None, &target),
+            &ffmpeg_args(&out.joined, None, None, None, &target),
             Some(4.0),
             &CancellationToken::new(),
             |p| last = p,
@@ -1354,6 +1599,102 @@ mod tests {
         assert!(err.hint.unwrap().contains("Update"));
     }
 
+    #[test]
+    fn subtitle_input_comes_before_the_output_options() {
+        let sub = SubtitleSource {
+            url: String::new(),
+            headers: Vec::new(),
+            ext: "srt".into(),
+            language: Some("eng".into()),
+            label: "English (auto)".into(),
+        };
+        let args = ffmpeg_args(
+            Path::new("v.part"),
+            Some(Path::new("a.part")),
+            Some((Path::new("subtitle.srt"), &sub)),
+            None,
+            Path::new("out.mp4"),
+        );
+        let last_input = args.iter().rposition(|a| a == "-i").unwrap();
+        let first_map = args.iter().position(|a| a == "-map").unwrap();
+        assert_eq!(args[last_input + 1], "subtitle.srt");
+        assert!(last_input < first_map);
+        assert!(args.contains(&"2:s:0".to_string()));
+        assert!(args.contains(&"language=eng".to_string()));
+        assert!(args.contains(&"title=English (auto)".to_string()));
+    }
+
+    /// Uses the real ffmpeg on this PC. Skips when ffmpeg is not installed.
+    #[tokio::test]
+    async fn adds_a_subtitle_track_with_real_ffmpeg() {
+        let Ok(ffmpeg) = which::which("ffmpeg") else {
+            eprintln!("ffmpeg not found: test skipped");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let video = dir.path().join("video.part");
+        let made = ffmpeg_make(
+            &ffmpeg,
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=2:size=160x120:rate=10",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=duration=2",
+                "-c:v",
+                "libx264",
+                "-c:a",
+                "aac",
+                "-shortest",
+                "-f",
+                "mp4",
+                video.to_str().unwrap(),
+            ],
+        )
+        .await;
+        assert!(made, "ffmpeg could not make the test input");
+        let srt = dir.path().join("subtitle.srt");
+        std::fs::write(&srt, "1\n00:00:00,000 --> 00:00:01,500\nHello\n\n").unwrap();
+        let sub = SubtitleSource {
+            url: String::new(),
+            headers: Vec::new(),
+            ext: "srt".into(),
+            language: Some("eng".into()),
+            label: "English".into(),
+        };
+        for ext in ["mp4", "mkv"] {
+            let out = dir.path().join(format!("out.siphon-tmp.{ext}"));
+            tools::run_ffmpeg(
+                &ffmpeg,
+                &ffmpeg_args(&video, None, Some((&srt, &sub)), None, &out),
+                Some(2.0),
+                &CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+            tools::check_output(&ffmpeg, &out, &CancellationToken::new())
+                .await
+                .expect("the video track stays intact");
+            let probe = tools::command(&ffmpeg)
+                .args(["-hide_banner", "-i", out.to_str().unwrap()])
+                .output()
+                .await
+                .unwrap();
+            let info = String::from_utf8_lossy(&probe.stderr);
+            let codec = if ext == "mp4" { "mov_text" } else { "subrip" };
+            assert!(
+                info.contains("Video: h264")
+                    && info.contains("Audio: aac")
+                    && info.contains(&format!("(eng): Subtitle: {codec}")),
+                "{ext} must have video, audio and the subtitle: {info}"
+            );
+        }
+    }
+
     /// Uses the real ffmpeg on this PC. Skips when ffmpeg is not installed.
     #[tokio::test]
     async fn merges_separate_video_and_audio_with_real_ffmpeg() {
@@ -1400,7 +1741,7 @@ mod tests {
         let out = dir.path().join("merged.siphon-tmp.mp4");
         tools::run_ffmpeg(
             &ffmpeg,
-            &ffmpeg_args(&video, Some(&audio), &out),
+            &ffmpeg_args(&video, Some(&audio), None, None, &out),
             Some(2.0),
             &CancellationToken::new(),
             |_| {},
@@ -1419,6 +1760,99 @@ mod tests {
         assert!(
             info.contains("Video: h264") && info.contains("Audio: aac"),
             "merged file must have both streams: {info}"
+        );
+    }
+
+    #[test]
+    fn h264_bitrate_doubles_the_source_within_limits() {
+        // Instagram VP9 1078p at 931 kbps: twice is below the 1080p minimum.
+        assert_eq!(h264_bitrate(Some(931_105), Some(1078)), 2_500_000);
+        assert_eq!(h264_bitrate(Some(3_000_000), Some(1080)), 6_000_000);
+        assert_eq!(h264_bitrate(Some(40_000_000), Some(2160)), 20_000_000);
+        assert_eq!(h264_bitrate(None, Some(720)), 3_000_000);
+        // A missing or zero height counts as 1080p.
+        assert_eq!(h264_bitrate(None, Some(0)), 5_000_000);
+        assert_eq!(h264_bitrate(Some(0), None), 5_000_000);
+    }
+
+    /// Uses the real ffmpeg on this PC. Skips when ffmpeg is not installed or has no VP9 encoder.
+    #[tokio::test]
+    async fn converts_vp9_and_opus_to_h264_and_aac_with_real_ffmpeg() {
+        let Ok(ffmpeg) = which::which("ffmpeg") else {
+            eprintln!("ffmpeg not found: test skipped");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let video = dir.path().join("video.part");
+        let audio = dir.path().join("audio.part");
+        let v = ffmpeg_make(
+            &ffmpeg,
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=2:size=320x240:rate=10",
+                "-c:v",
+                "libvpx-vp9",
+                "-f",
+                "webm",
+                video.to_str().unwrap(),
+            ],
+        )
+        .await;
+        let a = ffmpeg_make(
+            &ffmpeg,
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=duration=2",
+                "-c:a",
+                "libopus",
+                "-f",
+                "webm",
+                audio.to_str().unwrap(),
+            ],
+        )
+        .await;
+        if !(v && a) {
+            eprintln!("ffmpeg has no VP9 or Opus encoder: test skipped");
+            return;
+        }
+
+        let cancel = CancellationToken::new();
+        let encoder = tools::h264_encoder(&ffmpeg, &cancel)
+            .await
+            .expect("this ffmpeg can make H.264");
+        let recode = tools::Recode {
+            video: Some(tools::VideoEncode {
+                encoder,
+                bitrate: h264_bitrate(None, Some(240)),
+            }),
+            audio: true,
+        };
+        let out = dir.path().join("converted.siphon-tmp.mp4");
+        tools::run_ffmpeg(
+            &ffmpeg,
+            &ffmpeg_args(&video, Some(&audio), None, Some(&recode), &out),
+            Some(2.0),
+            &cancel,
+            |_| {},
+        )
+        .await
+        .unwrap();
+        tools::check_output(&ffmpeg, &out, &cancel)
+            .await
+            .expect("a converted file passes the output check");
+        let probe = tools::command(&ffmpeg)
+            .args(["-hide_banner", "-i", out.to_str().unwrap()])
+            .output()
+            .await
+            .unwrap();
+        let info = String::from_utf8_lossy(&probe.stderr);
+        assert!(
+            info.contains("Video: h264") && info.contains("(avc1") && info.contains("Audio: aac"),
+            "the converted file must be H.264 + AAC in MP4 ({encoder}): {info}"
         );
     }
 }

@@ -17,6 +17,8 @@ pub enum DownloadStatus {
     Downloading,
     Paused,
     Merging,
+    /// ffmpeg changes the video to a compatible format (H.264 + AAC in MP4).
+    Converting,
     Done,
     Failed,
     NeedsFfmpeg,
@@ -127,6 +129,9 @@ pub struct Quality {
     pub note: Option<String>,
     /// The saved file opens in the default players everywhere (QuickTime, Films & TV).
     pub plays_everywhere: bool,
+    /// What the default player cannot open: "VP9", "AV1 and Opus", "WebM". Set only on video
+    /// qualities that Siphon can save in a compatible format.
+    pub unsupported_format: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -140,6 +145,19 @@ pub struct Stream {
     pub encrypted: bool,
     pub qualities: Vec<Quality>,
     pub suggested_file_name: String,
+    /// Text subtitles that ffmpeg can add to the video. Empty when the site has none.
+    pub subtitles: Vec<SubtitleTrack>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubtitleTrack {
+    pub id: String,
+    /// The site's language code, for example `en` or `pt-BR`.
+    pub language: String,
+    pub label: String,
+    /// Made by speech recognition, not by a person.
+    pub auto: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -162,6 +180,12 @@ pub struct AddRequest {
     pub folder: String,
     pub referer: Option<String>,
     pub user_agent: Option<String>,
+    /// A `SubtitleTrack` id of the stream. ffmpeg adds the track to the video.
+    #[serde(default)]
+    pub subtitle_id: Option<String>,
+    /// Save in a compatible format. Used only when the quality has an `unsupported_format`.
+    #[serde(default)]
+    pub compatible_format: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -187,6 +211,19 @@ pub struct Settings {
     pub ffmpeg_path: Option<String>,
     pub yt_dlp_path: Option<String>,
     pub clipboard_watch: bool,
+    /// Resolve a copied video-site link before the user clicks Add.
+    #[serde(default = "default_true")]
+    pub smart_prefetch: bool,
+    /// Ask yt-dlp for the uploader's English title, when the video has one.
+    #[serde(default)]
+    pub english_titles: bool,
+    /// Default of the "Save in a compatible format" checkbox in Add link.
+    #[serde(default = "default_true")]
+    pub compatible_format: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Settings {
@@ -215,6 +252,8 @@ pub struct ToolStatus {
     pub version: Option<String>,
     /// A development (nightly or git) build, not a release.
     pub dev_build: bool,
+    /// Siphon has an official build of this tool for this system, so it can install and update it.
+    pub installable: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

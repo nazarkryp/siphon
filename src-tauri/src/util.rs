@@ -35,14 +35,48 @@ pub fn host_of(url: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The longest name in UTF-8 bytes. Linux and macOS allow 255 bytes, Windows 255 UTF-16
+/// units (never more than the UTF-8 bytes). The rest leaves room for " (n)" and ".part".
+const MAX_NAME_BYTES: usize = 200;
+
 /// Makes a name safe for Windows, macOS and Linux file systems.
 pub fn sanitize_file_name(name: &str) -> String {
-    const RESERVED: [&str; 22] = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    // Windows reserves these names with any extension. "¹²³" are superscript digits.
+    const RESERVED: [&str; 30] = [
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "CONIN$",
+        "CONOUT$",
+        "COM1",
+        "COM2",
+        "COM3",
+        "COM4",
+        "COM5",
+        "COM6",
+        "COM7",
+        "COM8",
+        "COM9",
+        "COM\u{b9}",
+        "COM\u{b2}",
+        "COM\u{b3}",
+        "LPT1",
+        "LPT2",
+        "LPT3",
+        "LPT4",
+        "LPT5",
+        "LPT6",
+        "LPT7",
+        "LPT8",
+        "LPT9",
+        "LPT\u{b9}",
+        "LPT\u{b2}",
+        "LPT\u{b3}",
     ];
     let cleaned: String = name
         .chars()
+        .filter(|c| !is_invisible(*c))
         .map(|c| match c {
             '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
             c if c.is_control() => '_',
@@ -53,19 +87,50 @@ pub fn sanitize_file_name(name: &str) -> String {
     cleaned = cleaned
         .trim_matches(|c: char| c == '.' || c == ' ')
         .to_string();
-    if cleaned.chars().count() > 150 {
+    if cleaned.len() > MAX_NAME_BYTES {
         let (stem, ext) = split_ext(&cleaned);
-        let stem: String = stem.chars().take(140).collect();
-        cleaned = format!("{}{}", stem.trim_end(), ext);
+        let stem = truncate_bytes(stem, MAX_NAME_BYTES - ext.len());
+        cleaned = format!("{}{}", stem.trim_end_matches(['.', ' ']), ext);
     }
     if cleaned.is_empty() {
         return "download".into();
     }
-    let (stem, _) = split_ext(&cleaned);
-    if RESERVED.iter().any(|r| r.eq_ignore_ascii_case(stem)) {
+    // Windows reads the name up to the first dot: "NUL.tar.gz" is "NUL".
+    let base = cleaned.split('.').next().unwrap_or_default().trim_end();
+    if RESERVED.iter().any(|r| r.eq_ignore_ascii_case(base)) {
         cleaned.insert(0, '_');
     }
     cleaned
+}
+
+/// Characters that show nothing: zero-width spaces, the byte order mark, the soft hyphen and
+/// the direction controls. A right-to-left override can make "exe.mp4" look like "4pm.exe".
+/// The zero-width joiners stay, because emoji and some scripts need them.
+fn is_invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{ad}'
+            | '\u{61c}'
+            | '\u{200b}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{feff}'
+    )
+}
+
+/// The longest start of `s` that has at most `max` bytes and ends on a character boundary.
+fn truncate_bytes(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let end = (0..=max)
+        .rev()
+        .find(|&i| s.is_char_boundary(i))
+        .unwrap_or(0);
+    &s[..end]
 }
 
 /// Splits "a.b.mp4" into ("a.b", ".mp4"). A name without an extension gives ("name", "").
@@ -141,7 +206,38 @@ mod tests {
         assert_eq!(sanitize_file_name(""), "download");
         let long = format!("{}.mp4", "x".repeat(300));
         let s = sanitize_file_name(&long);
-        assert!(s.ends_with(".mp4") && s.chars().count() <= 150);
+        assert!(s.ends_with(".mp4") && s.len() <= MAX_NAME_BYTES);
+    }
+
+    #[test]
+    fn limits_names_by_bytes() {
+        // Korean letters take 3 bytes in UTF-8. 150 of them are 450 bytes, too long for Linux.
+        let s = sanitize_file_name(&format!("{}.mp4", "말".repeat(150)));
+        assert!(s.ends_with(".mp4"));
+        assert!(s.len() <= MAX_NAME_BYTES);
+        assert_eq!(s.len(), 65 * 3 + 4);
+        // An emoji takes 2 UTF-16 units (the Windows limit) and 4 UTF-8 bytes.
+        let s = sanitize_file_name(&format!("{}.webm", "😀".repeat(150)));
+        assert!(s.ends_with(".webm") && s.len() <= MAX_NAME_BYTES);
+        assert!(s.encode_utf16().count() <= 255);
+    }
+
+    #[test]
+    fn removes_invisible_characters() {
+        assert_eq!(sanitize_file_name("song\u{202e}4pm.exe"), "song4pm.exe");
+        assert_eq!(sanitize_file_name("a\u{200b}b\u{feff}.mp4"), "ab.mp4");
+        // The joiner in an emoji sequence stays.
+        assert_eq!(sanitize_file_name("👩\u{200d}💻.mp4"), "👩\u{200d}💻.mp4");
+    }
+
+    #[test]
+    fn reserves_windows_names_before_the_first_dot() {
+        assert_eq!(sanitize_file_name("nul.tar.gz"), "_nul.tar.gz");
+        assert_eq!(sanitize_file_name("CONOUT$.log"), "_CONOUT$.log");
+        assert_eq!(sanitize_file_name("COM\u{b9}.mp4"), "_COM\u{b9}.mp4");
+        assert_eq!(sanitize_file_name("CON .txt"), "_CON .txt");
+        assert_eq!(sanitize_file_name("Console.txt"), "Console.txt");
+        assert_eq!(sanitize_file_name("COM10.mp4"), "COM10.mp4");
     }
 
     #[test]

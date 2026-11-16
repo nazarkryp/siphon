@@ -166,6 +166,26 @@
   box-shadow: var(--focus-field-shadow);
 }
 
+.select-field__control {
+  position: relative;
+}
+
+.select-field__select {
+  appearance: none;
+  /* Room for the 14 px chevron (.icon--sm). */
+  padding-right: calc(var(--space-5) * 2 + 14px);
+  cursor: pointer;
+}
+
+.select-field__chevron {
+  position: absolute;
+  top: 50%;
+  right: var(--space-5);
+  transform: translateY(-50%);
+  color: var(--color-text-secondary);
+  pointer-events: none;
+}
+
 .field-hint {
   margin-top: var(--space-2);
   font-size: var(--font-size-xs);
@@ -361,6 +381,11 @@
 
 .switch[aria-checked="true"] .switch__thumb {
   left: 18px;
+}
+
+.switch:disabled {
+  background: var(--color-disabled-text);
+  cursor: default;
 }
 
 /* Number stepper */

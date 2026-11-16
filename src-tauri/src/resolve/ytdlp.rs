@@ -1,14 +1,14 @@
 //! Step 3: ask yt-dlp for the formats of a site that Siphon cannot read by itself.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
 use serde::Deserialize;
 
-use super::{Choice, name_from, plays_everywhere};
-use crate::job::{JobSpec, MediaSource, SourceKind};
-use crate::model::{DownloadKind, Quality, Stream};
+use super::{Choice, compatible_convert, name_from, plays_everywhere};
+use crate::job::{JobSpec, MediaSource, SourceKind, SubtitleSource};
+use crate::model::{DownloadKind, Quality, Stream, SubtitleTrack};
 use crate::tools;
 
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -37,6 +37,31 @@ struct Info {
     protocol: Option<String>,
     http_headers: Option<HashMap<String, String>>,
     formats: Option<Vec<Format>>,
+    subtitles: Option<HashMap<String, Vec<SubtitleFormat>>>,
+    automatic_captions: Option<HashMap<String, Vec<SubtitleFormat>>>,
+}
+
+#[derive(Deserialize)]
+struct SubtitleFormat {
+    url: Option<String>,
+    ext: Option<String>,
+    name: Option<String>,
+    protocol: Option<String>,
+    http_headers: Option<HashMap<String, String>>,
+}
+
+impl SubtitleFormat {
+    /// A plain file in `ext` format. YouTube also lists HLS caption playlists and machine
+    /// translations (`tlang=`); Siphon does not offer those.
+    fn usable(&self, ext: &str) -> bool {
+        let plain = matches!(self.protocol.as_deref(), None | Some("http" | "https"));
+        let translated = self
+            .url
+            .as_deref()
+            .and_then(|u| url::Url::parse(u).ok())
+            .is_none_or(|u| u.query_pairs().any(|(k, _)| k == "tlang"));
+        self.ext.as_deref() == Some(ext) && plain && !translated
+    }
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -134,6 +159,7 @@ pub async fn resolve(
     url: &str,
     referer: Option<&str>,
     user_agent: Option<&str>,
+    english_titles: bool,
 ) -> Outcome {
     let mut cmd = tools::command(yt_dlp);
     cmd.args([
@@ -148,6 +174,10 @@ pub async fn resolve(
     }
     if let Some(ua) = user_agent.filter(|s| !s.trim().is_empty()) {
         cmd.args(["--user-agent", ua.trim()]);
+    }
+    if english_titles {
+        // Only the uploader's own translation. Without one, yt-dlp keeps the original title.
+        cmd.args(["--extractor-args", "youtube:lang=en"]);
     }
     cmd.args(["--", url]);
     let output = match tokio::time::timeout(TIMEOUT, cmd.output()).await {
@@ -268,6 +298,11 @@ fn from_info(info: Info, input_url: &str) -> Outcome {
     candidates.truncate(MAX_QUALITIES);
 
     let title = info.title.clone().unwrap_or_else(|| "video".into());
+    let subtitles = subtitle_tracks(&info);
+    let subtitle_choices: Vec<(String, SubtitleSource)> = subtitles
+        .iter()
+        .map(|(t, s)| (t.id.clone(), s.clone()))
+        .collect();
     let mut qualities = Vec::new();
     let mut choices = Vec::new();
     for (i, c) in candidates.iter().enumerate() {
@@ -280,18 +315,23 @@ fn from_info(info: Info, input_url: &str) -> Outcome {
             .map(Format::size)
             .unwrap_or((Some(0), false));
         let size = vs.zip(asz).map(|(a, b)| a + b);
-        let codecs = [
-            short_codec(c.video.vcodec.as_deref()),
-            short_codec(
-                c.audio
-                    .as_ref()
-                    .map_or(c.video.acodec.as_deref(), |a| a.acodec.as_deref()),
-            ),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" + ");
+        let acodec = c
+            .audio
+            .as_ref()
+            .map_or(c.video.acodec.as_deref(), |a| a.acodec.as_deref());
+        let (convert, unsupported_format) = compatible_convert(
+            container,
+            c.video.vcodec.as_deref(),
+            acodec,
+            c.video.tbr.map(|t| (t * 1000.0) as u64),
+            c.video.height,
+        )
+        .unzip();
+        let codecs = [short_codec(c.video.vcodec.as_deref()), short_codec(acodec)]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" + ");
         qualities.push(Quality {
             id: format!("q{}", i + 1),
             label: label.clone(),
@@ -307,6 +347,7 @@ fn from_info(info: Info, input_url: &str) -> Outcome {
             separate_audio: c.audio.is_some(),
             note: Some(container.to_uppercase()),
             plays_everywhere: c.plays_everywhere,
+            unsupported_format,
         });
         let audio = c
             .audio
@@ -319,11 +360,19 @@ fn from_info(info: Info, input_url: &str) -> Outcome {
                     .video
                     .source(format!("Video · {label}"), &info.http_headers),
                 audio,
+                subtitle: None,
                 duration: info.duration,
                 encrypted: false,
+                convert: None,
             },
             quality_label: Some(label),
             output_ext: Some(container.into()),
+            subtitles: if matches!(container, "mp4" | "webm" | "mkv") {
+                subtitle_choices.clone()
+            } else {
+                Vec::new()
+            },
+            convert,
         });
     }
 
@@ -357,17 +406,22 @@ fn from_info(info: Info, input_url: &str) -> Outcome {
             separate_audio: false,
             note: Some(ext.to_uppercase()),
             plays_everywhere: audio_plays(a),
+            unsupported_format: None,
         });
         choices.push(Choice {
             kind: DownloadKind::Ytdlp,
             spec: JobSpec {
                 primary: a.source(format!("Audio · {}", a.ext()), &info.http_headers),
                 audio: None,
+                subtitle: None,
                 duration: info.duration,
                 encrypted: false,
+                convert: None,
             },
             quality_label: Some("Audio only".into()),
             output_ext: Some(ext),
+            subtitles: Vec::new(),
+            convert: None,
         });
     }
     if qualities.is_empty() {
@@ -392,12 +446,144 @@ fn from_info(info: Info, input_url: &str) -> Outcome {
         encrypted: false,
         qualities,
         suggested_file_name: name_from(info.title.as_deref(), input_url, &first_ext),
+        subtitles: subtitles.into_iter().map(|(t, _)| t).collect(),
     };
     Outcome::Found {
         stream,
         choices,
         summary,
     }
+}
+
+/// Text subtitles for the video: the uploaded tracks, then the speech-to-text tracks in the
+/// video's own language. Each track uses SRT when the site has it. YouTube's VTT
+/// speech-to-text files repeat every line for the rolling display; its SRT files do not.
+fn subtitle_tracks(info: &Info) -> Vec<(SubtitleTrack, SubtitleSource)> {
+    let mut out: Vec<(SubtitleTrack, SubtitleSource)> = Vec::new();
+    let mut seen_urls = HashSet::new();
+    for (auto, map) in [(false, &info.subtitles), (true, &info.automatic_captions)] {
+        let mut langs: Vec<_> = map.iter().flatten().collect();
+        // YouTube lists the original speech-to-text track twice: as `en-orig` with a name,
+        // and as `en` without one. Take `-orig` first, so the URL check drops the copy.
+        langs.sort_by_key(|(code, _)| (!code.ends_with("-orig"), code.as_str()));
+        let mut group = Vec::new();
+        for (code, formats) in langs {
+            let Some(file) = ["srt", "vtt"]
+                .into_iter()
+                .find_map(|ext| formats.iter().find(|f| f.usable(ext)))
+            else {
+                continue;
+            };
+            let (Some(url), Some(ext)) = (&file.url, &file.ext) else {
+                continue;
+            };
+            if !seen_urls.insert(url.clone()) {
+                continue;
+            }
+            let language = code.strip_suffix("-orig").unwrap_or(code);
+            let name = formats
+                .iter()
+                .find_map(|f| f.name.as_deref())
+                .map(|n| n.trim_end_matches(" (Original)").to_string())
+                .unwrap_or_else(|| language.to_string());
+            let label = if auto { format!("{name} (auto)") } else { name };
+            let headers = file
+                .http_headers
+                .as_ref()
+                .or(info.http_headers.as_ref())
+                .map(sorted_pairs)
+                .unwrap_or_default();
+            group.push((
+                SubtitleTrack {
+                    id: String::new(),
+                    language: language.to_string(),
+                    label: label.clone(),
+                    auto,
+                },
+                SubtitleSource {
+                    url: url.clone(),
+                    headers,
+                    ext: ext.clone(),
+                    language: iso639_2(language),
+                    label,
+                },
+            ));
+        }
+        group.sort_by(|a, b| a.0.label.cmp(&b.0.label));
+        out.extend(group);
+    }
+    for (i, (track, _)) in out.iter_mut().enumerate() {
+        track.id = format!("t{}", i + 1);
+    }
+    out
+}
+
+/// The three-letter code that MP4 needs, from a site code such as `en` or `pt-BR`.
+/// None for a language that is not in the table.
+fn iso639_2(code: &str) -> Option<String> {
+    const TABLE: &[(&str, &str)] = &[
+        ("ar", "ara"),
+        ("be", "bel"),
+        ("bg", "bul"),
+        ("bn", "ben"),
+        ("ca", "cat"),
+        ("cs", "ces"),
+        ("cy", "cym"),
+        ("da", "dan"),
+        ("de", "deu"),
+        ("el", "ell"),
+        ("en", "eng"),
+        ("es", "spa"),
+        ("et", "est"),
+        ("eu", "eus"),
+        ("fa", "fas"),
+        ("fi", "fin"),
+        ("fr", "fra"),
+        ("ga", "gle"),
+        ("gl", "glg"),
+        ("he", "heb"),
+        ("hi", "hin"),
+        ("hr", "hrv"),
+        ("hu", "hun"),
+        ("hy", "hye"),
+        ("id", "ind"),
+        ("is", "isl"),
+        ("it", "ita"),
+        ("ja", "jpn"),
+        ("ka", "kat"),
+        ("kk", "kaz"),
+        ("ko", "kor"),
+        ("lt", "lit"),
+        ("lv", "lav"),
+        ("ms", "msa"),
+        ("nb", "nob"),
+        ("nl", "nld"),
+        ("no", "nor"),
+        ("pl", "pol"),
+        ("pt", "por"),
+        ("ro", "ron"),
+        ("ru", "rus"),
+        ("sk", "slk"),
+        ("sl", "slv"),
+        ("sr", "srp"),
+        ("sv", "swe"),
+        ("ta", "tam"),
+        ("te", "tel"),
+        ("th", "tha"),
+        ("tr", "tur"),
+        ("uk", "ukr"),
+        ("ur", "urd"),
+        ("vi", "vie"),
+        ("zh", "zho"),
+    ];
+    let base = code.split(['-', '_']).next()?.to_ascii_lowercase();
+    if base.len() == 3 && base.bytes().all(|b| b.is_ascii_lowercase()) {
+        return Some(base);
+    }
+    TABLE
+        .iter()
+        .find(|(two, _)| *two == base)
+        .map(|(_, three)| three.to_string())
 }
 
 fn video_label(f: &Format) -> String {
@@ -511,6 +697,76 @@ mod tests {
             from_info(info, "https://a.test"),
             Outcome::NotFound(_)
         ));
+    }
+
+    #[test]
+    fn offers_uploaded_and_original_speech_subtitles() {
+        let info: Info = serde_json::from_str(r#"{
+          "title": "x", "http_headers": {"User-Agent": "UA-X"},
+          "formats": [
+            {"format_id": "18", "ext": "mp4", "url": "https://s/v18", "vcodec": "avc1", "acodec": "mp4a.40.2", "height": 360, "protocol": "https"},
+            {"format_id": "140", "ext": "m4a", "url": "https://s/a140", "vcodec": "none", "acodec": "mp4a.40.2", "protocol": "https"}
+          ],
+          "subtitles": {
+            "live_chat": [{"ext": "json", "url": "https://s/chat", "protocol": "youtube_live_chat"}],
+            "de-DE": [{"ext": "vtt", "url": "https://s/t?lang=de-DE&fmt=vtt", "name": "German (Germany)"}],
+            "en": [
+              {"ext": "json3", "url": "https://s/t?lang=en&fmt=json3", "name": "English"},
+              {"ext": "vtt", "url": "https://s/t?lang=en&fmt=vtt", "name": "English"},
+              {"ext": "srt", "url": "https://s/t?lang=en&fmt=srt", "name": "English"}
+            ]
+          },
+          "automatic_captions": {
+            "en": [
+              {"ext": "vtt", "url": "https://m/hls_timedtext_playlist", "protocol": "m3u8_native"},
+              {"ext": "srt", "url": "https://s/t?caps=asr&lang=en&fmt=srt"}
+            ],
+            "en-orig": [{"ext": "srt", "url": "https://s/t?caps=asr&lang=en&fmt=srt", "name": "English (Original)"}],
+            "fr": [{"ext": "srt", "url": "https://s/t?caps=asr&lang=en&tlang=fr&fmt=srt", "name": "French"}],
+            "ja": [{"ext": "vtt", "url": "https://m/ja_playlist", "protocol": "m3u8_native"}]
+          }
+        }"#)
+        .unwrap();
+        let Outcome::Found {
+            stream, choices, ..
+        } = from_info(info, "https://site.test/watch/1")
+        else {
+            panic!("expected formats");
+        };
+        let tracks: Vec<_> = stream
+            .subtitles
+            .iter()
+            .map(|t| (t.id.as_str(), t.language.as_str(), t.label.as_str(), t.auto))
+            .collect();
+        assert_eq!(
+            tracks,
+            [
+                ("t1", "en", "English", false),
+                ("t2", "de-DE", "German (Germany)", false),
+                ("t3", "en", "English (auto)", true),
+            ]
+        );
+        // The video takes subtitles; SRT wins over VTT, and the language tag has three letters.
+        let video = &choices[0].subtitles;
+        assert_eq!(video.len(), 3);
+        assert_eq!(video[0].1.ext, "srt");
+        assert_eq!(video[0].1.language.as_deref(), Some("eng"));
+        assert_eq!(video[1].1.ext, "vtt");
+        assert_eq!(video[1].1.language.as_deref(), Some("deu"));
+        assert_eq!(
+            video[2].1.headers,
+            vec![("User-Agent".to_string(), "UA-X".to_string())]
+        );
+        // Audio only cannot take subtitles.
+        assert!(choices.last().unwrap().subtitles.is_empty());
+    }
+
+    #[test]
+    fn language_codes_for_mp4() {
+        assert_eq!(iso639_2("pt-BR").as_deref(), Some("por"));
+        assert_eq!(iso639_2("es-419").as_deref(), Some("spa"));
+        assert_eq!(iso639_2("fil").as_deref(), Some("fil"));
+        assert_eq!(iso639_2("xx"), None);
     }
 
     #[test]

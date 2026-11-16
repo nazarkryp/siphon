@@ -45,7 +45,7 @@ export interface StoreState {
   ytDlpBannerDismissed: boolean;
   notices: Notice[];
   installs: Partial<Record<ToolId, InstallState>>;
-  /** Newest tool releases. Settings checks them once per app run and again on "Detect again". */
+  /** Newest tool releases. Settings checks them once per app run and again on the Tools button in Settings. */
   toolUpdates: ToolUpdatesState;
 }
 

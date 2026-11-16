@@ -48,14 +48,6 @@ export const MoreIcon = makeIcon(<path d="M6 12h.01M12 12h.01M18 12h.01" strokeW
 export const ChevronDownIcon = makeIcon(<path d="M7 10l5 5 5-5" />);
 export const ChevronUpIcon = makeIcon(<path d="M7 14l5-5 5 5" />);
 export const CloseIcon = makeIcon(<path d="M7 7l10 10M17 7L7 17" />);
-export const MinimizeIcon = makeIcon(<path d="M6 12h12" />);
-export const MaximizeIcon = makeIcon(<rect x="6.5" y="6.5" width="11" height="11" rx="1.5" />);
-export const RestoreIcon = makeIcon(
-  <>
-    <rect x="5.5" y="8.5" width="10" height="10" rx="1.5" />
-    <path d="M9 6h7.5A1.5 1.5 0 0 1 18 7.5V15" />
-  </>,
-);
 export const CheckIcon = makeIcon(<path d="M5 12.5l4.5 4.5L19 7.5" />);
 export const CheckCircleIcon = makeIcon(
   <>

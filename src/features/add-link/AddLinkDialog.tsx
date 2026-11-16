@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { api, type ResolveResult, type Stream } from "../../api";
 import { Button } from "../../components/Button";
 import { Dialog } from "../../components/Dialog";
+import { SelectField } from "../../components/SelectField";
 import { TextField } from "../../components/TextField";
 import { AlertCircleIcon, DownloadIcon } from "../../components/icons";
 import { errorMessage } from "../../lib/errors";
+import { DefaultPlayer } from "../../lib/platform";
 import { formatBytes, formatSize } from "../../lib/format";
 import { useAppData, useStore } from "../../state/store";
 import { NoStreamPanel, ResolveErrorPanel } from "./NoStreamPanel";
@@ -41,6 +43,8 @@ export function AddLinkDialog({ url, onClose, onAdded }: AddLinkDialogProps) {
   const [userAgent, setUserAgent] = useState("");
   const [streamId, setStreamId] = useState<string | null>(null);
   const [qualityId, setQualityId] = useState<string | null>(null);
+  const [subtitleId, setSubtitleId] = useState<string | null>(null);
+  const [compatibleFormat, setCompatibleFormat] = useState(settings.compatibleFormat);
   const [fileName, setFileName] = useState("");
   const [folder, setFolder] = useState(settings.downloadFolder);
   const [freeSpace, setFreeSpace] = useState<number | null>(null);
@@ -54,10 +58,16 @@ export function AddLinkDialog({ url, onClose, onAdded }: AddLinkDialogProps) {
   const streams = result?.streams ?? [];
   const stream = streams.find((s) => s.id === streamId) ?? null;
   const quality = stream?.qualities.find((q) => q.id === qualityId) ?? null;
+  // Audio-only qualities have no resolution and cannot take subtitles.
+  const canHaveSubtitles = (stream?.subtitles.length ?? 0) > 0 && quality?.resolution != null;
+  const subtitle = canHaveSubtitles ? subtitleId : null;
+  const unsupported = quality?.unsupportedFormat ?? null;
+  const convert = unsupported != null && compatibleFormat;
 
   function selectStream(next: Stream) {
     setStreamId(next.id);
     setQualityId(defaultQuality(next)?.id ?? null);
+    setSubtitleId(null);
     setFileName(next.suggestedFileName);
   }
 
@@ -141,6 +151,8 @@ export function AddLinkDialog({ url, onClose, onAdded }: AddLinkDialogProps) {
         folder: folder.trim(),
         referer: orNull(referer),
         userAgent: orNull(userAgent),
+        subtitleId: subtitle,
+        compatibleFormat: convert,
       });
       dispatch({ type: "downloadUpserted", download: added });
       onAdded?.();
@@ -153,7 +165,9 @@ export function AddLinkDialog({ url, onClose, onAdded }: AddLinkDialogProps) {
 
   const resolving = phase.kind === "resolving";
   const noStreams = result != null && streams.length === 0;
-  const needsFfmpeg = stream != null && (stream.kind === "hls" || quality?.separateAudio === true);
+  const needsFfmpeg =
+    stream != null &&
+    (stream.kind === "hls" || quality?.separateAudio === true || subtitle != null || convert);
   const canDownload =
     stream != null && quality != null && fileName.trim() !== "" && folder.trim() !== "";
 
@@ -255,11 +269,12 @@ export function AddLinkDialog({ url, onClose, onAdded }: AddLinkDialogProps) {
           }}
           trailing={
             <Button
+              className="add-link__fetch"
               loading={resolving}
               disabled={link.trim() === ""}
               onClick={() => void resolve(link.trim(), referer, userAgent)}
             >
-              {phase.kind === "idle" ? "Fetch" : "Fetch again"}
+              {resolving ? "Fetching…" : phase.kind === "idle" ? "Fetch" : "Fetch again"}
             </Button>
           }
         />
@@ -305,6 +320,46 @@ export function AddLinkDialog({ url, onClose, onAdded }: AddLinkDialogProps) {
             onSelectStream={selectStream}
             onSelectQuality={setQualityId}
           />
+        )}
+
+        {stream && canHaveSubtitles && (
+          <div className="add-link__fields">
+            <SelectField
+              label="Subtitles"
+              value={subtitleId ?? ""}
+              onChange={(event) => setSubtitleId(event.target.value || null)}
+              hint={
+                stream.subtitles.find((track) => track.id === subtitle)?.auto
+                  ? "Speech recognition made these subtitles. They can have errors."
+                  : "The subtitles become a track that you turn on in the player."
+              }
+            >
+              <option value="">None</option>
+              {stream.subtitles.map((track) => (
+                <option key={track.id} value={track.id}>
+                  {track.label}
+                </option>
+              ))}
+            </SelectField>
+          </div>
+        )}
+
+        {stream && unsupported != null && (
+          <div className="add-link__compat">
+            <label className="add-link__check">
+              <input
+                type="checkbox"
+                checked={compatibleFormat}
+                onChange={(event) => setCompatibleFormat(event.target.checked)}
+              />
+              Save in a compatible format
+            </label>
+            <p className="field-hint">
+              {compatibleFormat
+                ? `This video uses ${unsupported}. ${DefaultPlayer} cannot open it. Siphon changes it to H.264 after the download. This takes extra time and makes the file bigger.`
+                : `This video uses ${unsupported}. ${DefaultPlayer} cannot open it. VLC and IINA can.`}
+            </p>
+          </div>
         )}
 
         {!resolving && phase.kind !== "idle" && (

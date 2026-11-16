@@ -16,6 +16,8 @@
   --color-input-border: #dddddd;
   --color-track: rgba(0, 0, 0, 0.08);
   --color-backdrop: rgba(49, 48, 46, 0.32);
+  /* macOS sheets: a lighter shade, because the sheet hangs from the window bar and is clearly on top. */
+  --color-backdrop-sheet: rgba(49, 48, 46, 0.12);
 
   /* Brand: the logo gradient. app-icon.svg uses the same values. */
   --color-brand-start: #2a96ff;
@@ -101,6 +103,14 @@
   --control-height: 36px;
   --icon-button-size: 32px;
   --window-bar-height: 40px;
+  /* The title bar holds the link form. macOS centres the traffic lights in it (tauri.macos.conf.json). */
+  --window-toolbar-height: 56px;
+  /* Room for the macOS traffic lights: 21 px inset (the same as above them) + about 61 px of
+     buttons + 10 px. The bar's 8 px column gap follows, so the field starts 18 px after them. */
+  --window-traffic-lights-width: 92px;
+  /* Windows caption buttons */
+  --window-caption-width: 46px;
+  --color-window-close: #c42b1c;
   --status-line-height: 32px;
 
   /* Queue columns, shared by the header and every row */
@@ -119,6 +129,7 @@
   --shadow-deep: rgba(0, 0, 0, 0.01) 0 1px 3px, rgba(0, 0, 0, 0.02) 0 3px 7px,
     rgba(0, 0, 0, 0.02) 0 7px 15px, rgba(0, 0, 0, 0.04) 0 14px 28px, rgba(0, 0, 0, 0.05) 0 23px 52px;
   --shadow-thumb: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-sheet: 0 10px 34px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.06);
 
   /* Focus */
   --focus-ring-width: 2px;
@@ -127,4 +138,6 @@
   --focus-field-shadow: 0 0 0 1px var(--color-focus), 0 0 0 4px var(--color-accent-soft);
 
   --duration-fast: 120ms;
+  --duration-sheet: 360ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }

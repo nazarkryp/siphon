@@ -55,11 +55,12 @@ export function ToolSetting({ tool, status, update, required, value, onChange, i
   const failed = install?.status === "failed";
   const { name, size } = TOOL_INFO[tool];
   const found = status?.found ?? false;
+  const installable = status?.installable ?? false;
   const verb = found ? "Update" : "Install";
   const upToDate = isUpToDate(status, update);
   // A found tool waits for the update check, so that the button does not show and then go away.
-  const checking = found && !update && !installing && !failed;
-  const showButton = !upToDate && !checking;
+  const checking = installable && found && !update && !installing && !failed;
+  const showButton = installable && !upToDate && !checking;
 
   let label = `${verb} ${name} (${size})`;
   if (failed) label = "Try again";
@@ -96,13 +97,20 @@ export function ToolSetting({ tool, status, update, required, value, onChange, i
         </div>
       )}
       {checking && <p className="field-hint">Checking for a newer version…</p>}
+      {status && !installable && !found && (
+        <p className="field-hint">
+          Siphon cannot install {name} on this system. Install it with your package manager, then set its path here.
+        </p>
+      )}
       {found && update?.error && !installing && <p className="field-hint">{update.error}</p>}
       {status?.found && status.devBuild && !installing && (
         <div className="install-error" role="note">
           <AlertCircleIcon size="sm" />
           <span>
-            This is a development build of {name}. Some development builds make broken video files. Click{" "}
-            {verb} to install the release build.
+            This is a development build of {name}. Some development builds make broken video files.{" "}
+            {installable
+              ? `Click ${verb} to install the release build.`
+              : "Install a release build with your package manager."}
           </span>
         </div>
       )}

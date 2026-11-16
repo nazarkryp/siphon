@@ -15,7 +15,7 @@ import "./progress.css";
 function activeTone(status: DownloadStatus): BarTone {
   if (status === "downloading") return "downloading";
   if (status === "failed") return "failed";
-  if (status === "merging" || status === "done") return "done";
+  if (status === "merging" || status === "converting" || status === "done") return "done";
   return "paused";
 }
 
@@ -102,7 +102,9 @@ function SegmentsView({ download, detail }: { download: Download; detail: Segmen
           {detail.inFlight > 0 && ` · ${detail.inFlight} in parallel`}
         </span>
         <span>
-          {download.status === "merging"
+          {download.status === "converting"
+            ? `Converting with ffmpeg${mergeSuffix(download)}`
+            : download.status === "merging"
             ? `Joining with ffmpeg${mergeSuffix(download)}`
             : "Then: join with ffmpeg (copy, no re-encode)"}
         </span>
@@ -174,6 +176,7 @@ function StreamsView({ download, detail }: { download: Download; detail: Streams
   const videoDone = isComplete(detail.video);
   const audioDone = isComplete(detail.audio);
   const merging = download.status === "merging";
+  const converting = download.status === "converting";
 
   function partStep(name: string, done: boolean) {
     if (done) {
@@ -208,9 +211,11 @@ function StreamsView({ download, detail }: { download: Download; detail: Streams
             Merged with ffmpeg
           </li>
         ) : (
-          <li className={merging ? "step-line step-line--merging" : "step-line"}>
+          <li className={merging || converting ? "step-line step-line--merging" : "step-line"}>
             <LayersIcon />
-            {merging
+            {converting
+              ? `Converting with ffmpeg${mergeSuffix(download)}`
+              : merging
               ? `Merging with ffmpeg${mergeSuffix(download)}`
               : "Then: merge with ffmpeg (copy, no re-encode)"}
           </li>
@@ -227,10 +232,10 @@ export function ProgressDetail({ download, id }: { download: Download; id: strin
       {detail.type === "chunks" && <ChunksView download={download} chunks={detail.chunks} />}
       {detail.type === "segments" && <SegmentsView download={download} detail={detail} />}
       {detail.type === "streams" && <StreamsView download={download} detail={detail} />}
-      {download.status === "merging" && detail.type === "chunks" && (
+      {(download.status === "merging" || download.status === "converting") && detail.type === "chunks" && (
         <div className="merge-line num">
           <LayersIcon size="sm" />
-          Finishing with ffmpeg{mergeSuffix(download)}
+          {download.status === "converting" ? "Converting" : "Finishing"} with ffmpeg{mergeSuffix(download)}
         </div>
       )}
     </div>

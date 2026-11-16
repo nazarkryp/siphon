@@ -3,9 +3,10 @@ interface SwitchProps {
   onChange: (checked: boolean) => void;
   labelledBy: string;
   describedBy?: string;
+  disabled?: boolean;
 }
 
-export function Switch({ checked, onChange, labelledBy, describedBy }: SwitchProps) {
+export function Switch({ checked, onChange, labelledBy, describedBy, disabled }: SwitchProps) {
   return (
     <button
       type="button"
@@ -14,6 +15,7 @@ export function Switch({ checked, onChange, labelledBy, describedBy }: SwitchPro
       aria-checked={checked}
       aria-labelledby={labelledBy}
       aria-describedby={describedBy}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
     >
       <span className="switch__thumb" />

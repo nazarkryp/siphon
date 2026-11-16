@@ -2,7 +2,7 @@ import type { Download, DownloadStatus } from "../../api";
 import type { Filter } from "../../state/reducer";
 
 const FILTER_STATUSES: Record<Exclude<Filter, "all">, DownloadStatus[]> = {
-  active: ["downloading", "merging"],
+  active: ["downloading", "merging", "converting"],
   queued: ["queued", "needsFfmpeg"],
   paused: ["paused"],
   done: ["done"],

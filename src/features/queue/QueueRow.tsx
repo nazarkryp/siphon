@@ -50,7 +50,12 @@ function progressText(download: Download): string {
 }
 
 function mergeText(download: Download): string {
-  const what = download.detail.type === "streams" ? "Joining video and audio" : "Joining with ffmpeg";
+  const what =
+    download.status === "converting"
+      ? "Changing to a compatible format"
+      : download.detail.type === "streams"
+        ? "Joining video and audio"
+        : "Joining with ffmpeg";
   return download.mergeProgress != null ? `${what} · ${formatPercent(download.mergeProgress)}` : what;
 }
 
@@ -76,6 +81,7 @@ function ProgressCell({ download, position, now }: Pick<QueueRowProps, "download
         </>
       );
     case "merging":
+    case "converting":
       return (
         <>
           <ProgressBar value={download.mergeProgress ?? null} tone="merging" label={label} striped />
@@ -137,9 +143,13 @@ function speedCell(download: Download): ReactNode {
 }
 
 function etaCell(download: Download): ReactNode {
-  const running = download.status === "downloading" || download.status === "merging";
+  const running =
+    download.status === "downloading" ||
+    download.status === "merging" ||
+    download.status === "converting";
   if (!running || download.etaSeconds == null) return <Dash />;
-  return `${download.status === "merging" ? "≈ " : ""}${formatEta(download.etaSeconds)}`;
+  const estimate = download.status === "merging" || download.status === "converting";
+  return `${estimate ? "≈ " : ""}${formatEta(download.etaSeconds)}`;
 }
 
 export const QueueRow = memo(function QueueRow({

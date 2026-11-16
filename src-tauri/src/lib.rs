@@ -45,6 +45,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
             commands::resolve_link,
+            commands::cancel_prefetch,
             commands::add_download,
             commands::add_links,
             commands::pause_download,

@@ -20,6 +20,7 @@ export const api = {
   getState: () => invoke<AppState>("get_state"),
   resolveLink: (url: string, referer: string | null, userAgent: string | null) =>
     invoke<ResolveResult>("resolve_link", { url, referer, userAgent }),
+  cancelPrefetch: () => invoke<void>("cancel_prefetch"),
   addDownload: (request: AddRequest) => invoke<Download>("add_download", { request }),
   addLinks: (urls: string[]) => invoke<AddLinksResult>("add_links", { urls }),
   pause: (id: string) => invoke<void>("pause_download", { id }),

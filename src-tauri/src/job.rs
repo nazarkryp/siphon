@@ -24,19 +24,52 @@ pub struct MediaSource {
     pub size_hint: Option<u64>,
 }
 
+/// A text subtitle track. It downloads in the merge step, and ffmpeg adds it to the file.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubtitleSource {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    /// `srt` or `vtt`. ffmpeg reads the format from the file name.
+    pub ext: String,
+    /// ISO 639-2 code, for example `eng`. MP4 does not accept two-letter codes.
+    pub language: Option<String>,
+    pub label: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobSpec {
     pub primary: MediaSource,
     /// Set when video and audio download separately. ffmpeg merges them at the end.
     pub audio: Option<MediaSource>,
+    #[serde(default)]
+    pub subtitle: Option<SubtitleSource>,
     pub duration: Option<f64>,
     pub encrypted: bool,
+    /// Set when the user saves the video in a compatible format (H.264 + AAC in MP4).
+    #[serde(default)]
+    pub convert: Option<Convert>,
+}
+
+/// What ffmpeg must change so that the default player opens the file. A track that is
+/// already compatible is copied. With both flags false, only the container changes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Convert {
+    pub video: bool,
+    pub audio: bool,
+    /// Bits per second of the source video, when the site gives it.
+    pub source_bitrate: Option<u64>,
+    pub height: Option<u32>,
 }
 
 impl JobSpec {
     pub fn needs_ffmpeg(&self) -> bool {
-        self.audio.is_some() || self.primary.kind == SourceKind::Hls
+        self.audio.is_some()
+            || self.subtitle.is_some()
+            || self.convert.is_some()
+            || self.primary.kind == SourceKind::Hls
     }
 
     pub fn sources(&self) -> Vec<&MediaSource> {

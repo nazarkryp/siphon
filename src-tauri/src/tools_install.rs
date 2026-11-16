@@ -58,16 +58,59 @@ pub struct Asset {
     pub payload: Payload,
 }
 
-pub fn official_asset(tool: ToolId) -> Result<Asset, String> {
+/// The release asset name and the saved file name of yt-dlp on this system.
+fn yt_dlp_names() -> Option<(&'static str, &'static str)> {
+    match std::env::consts::OS {
+        "windows" => Some(("yt-dlp.exe", "yt-dlp.exe")),
+        "macos" => Some(("yt-dlp_macos", "yt-dlp")),
+        "linux" => Some(("yt-dlp_linux", "yt-dlp")),
+        _ => None,
+    }
+}
+
+/// Where Siphon downloads ffmpeg on this system.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FfmpegSource {
+    /// The gyan.dev release build for 64-bit Windows.
+    Gyan,
+    /// The martin-riedl.de release build. Holds the "<os>/<arch>" part of its URLs.
+    /// The macOS builds are signed with a Developer ID and notarized by Apple.
+    MartinRiedl(&'static str),
+}
+
+fn ffmpeg_source() -> Option<FfmpegSource> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => Some(FfmpegSource::Gyan),
+        ("macos", "aarch64") => Some(FfmpegSource::MartinRiedl("macos/arm64")),
+        ("macos", "x86_64") => Some(FfmpegSource::MartinRiedl("macos/amd64")),
+        ("linux", "x86_64") => Some(FfmpegSource::MartinRiedl("linux/amd64")),
+        ("linux", "aarch64") => Some(FfmpegSource::MartinRiedl("linux/arm64")),
+        _ => None,
+    }
+}
+
+/// True when Siphon has an official build of the tool for this system.
+pub fn can_install(tool: ToolId) -> bool {
+    match tool {
+        ToolId::YtDlp => yt_dlp_names().is_some(),
+        ToolId::Ffmpeg => ffmpeg_source().is_some(),
+    }
+}
+
+fn cannot_install(tool: ToolId) -> String {
+    let name = tool_slug(tool);
+    format!(
+        "Siphon cannot install {name} on this system. Install {name} with your package manager, then set its path in Settings."
+    )
+}
+
+/// The build that `install` downloads now. For martin-riedl.de this asks the server which
+/// build is the newest, so the download and its checksum are always of the same build.
+pub async fn official_asset(tool: ToolId) -> Result<Asset, String> {
     const YT: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
     match tool {
         ToolId::YtDlp => {
-            let (name, file_name) = match std::env::consts::OS {
-                "windows" => ("yt-dlp.exe", "yt-dlp.exe"),
-                "macos" => ("yt-dlp_macos", "yt-dlp"),
-                "linux" => ("yt-dlp_linux", "yt-dlp"),
-                os => return Err(format!("Siphon cannot install yt-dlp on {os}.")),
-            };
+            let (name, file_name) = yt_dlp_names().ok_or_else(|| cannot_install(tool))?;
             Ok(Asset {
                 url: format!("{YT}/{name}"),
                 checksum: Checksum::SumsFile {
@@ -79,22 +122,74 @@ pub fn official_asset(tool: ToolId) -> Result<Asset, String> {
                 },
             })
         }
-        ToolId::Ffmpeg => {
-            if !(cfg!(windows) && cfg!(target_arch = "x86_64")) {
-                return Err("Siphon can install ffmpeg only on 64-bit Windows. Install ffmpeg with your package manager, then set its path in Settings.".into());
+        ToolId::Ffmpeg => match ffmpeg_source().ok_or_else(|| cannot_install(tool))? {
+            FfmpegSource::Gyan => {
+                const ZIP: &str =
+                    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
+                Ok(Asset {
+                    url: ZIP.into(),
+                    checksum: Checksum::Single {
+                        url: format!("{ZIP}.sha256"),
+                    },
+                    payload: Payload::Zip {
+                        files: vec!["ffmpeg.exe".into(), "ffprobe.exe".into()],
+                    },
+                })
             }
-            const ZIP: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
-            Ok(Asset {
-                url: ZIP.into(),
-                checksum: Checksum::Single {
-                    url: format!("{ZIP}.sha256"),
-                },
-                payload: Payload::Zip {
-                    files: vec!["ffmpeg.exe".into(), "ffprobe.exe".into()],
-                },
-            })
-        }
+            FfmpegSource::MartinRiedl(platform) => {
+                let url = martin_riedl_build_url(platform)
+                    .await
+                    .map_err(|e| format!("Siphon could not find the newest ffmpeg build: {e}."))?;
+                Ok(Asset {
+                    // The file "<build>.sha256" holds "<hash>  ffmpeg.zip".
+                    checksum: Checksum::Single {
+                        url: format!("{url}.sha256"),
+                    },
+                    url,
+                    payload: Payload::Zip {
+                        files: vec!["ffmpeg".into()],
+                    },
+                })
+            }
+        },
     }
+}
+
+const MARTIN_RIEDL_HOST: &str = "ffmpeg.martin-riedl.de";
+
+/// martin-riedl.de answers a GET on ".../redirect/latest/..." with a redirect to the newest
+/// build, for example ".../download/macos/arm64/1789931890_9.0.2/ffmpeg.zip". It answers a HEAD
+/// with 404. Siphon reads the redirect target and does not follow it.
+async fn martin_riedl_build_url(platform: &str) -> Result<String, String> {
+    let url = format!("https://{MARTIN_RIEDL_HOST}/redirect/latest/{platform}/release/ffmpeg.zip");
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_redirection() {
+        return Err(format!("HTTP {}", resp.status().as_u16()));
+    }
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or("the server sent no build address")?;
+    let target = resp.url().join(location).map_err(|e| e.to_string())?;
+    if target.scheme() != "https" || target.host_str() != Some(MARTIN_RIEDL_HOST) {
+        return Err(format!("unexpected build address {target}"));
+    }
+    Ok(target.to_string())
+}
+
+/// Reads "9.0.2" from a build URL such as ".../1789931890_9.0.2/ffmpeg.zip".
+fn martin_riedl_version(build_url: &str) -> Option<String> {
+    let mut segments = build_url.rsplit('/');
+    segments.next()?;
+    let (_, version) = segments.next()?.split_once('_')?;
+    parse_release_version(version)
 }
 
 const YT_DLP_LATEST_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest";
@@ -104,16 +199,25 @@ const FFMPEG_LATEST_URL: &str = "https://github.com/GyanD/codexffmpeg/releases/l
 
 /// The version of the build that `install` downloads now, for example "9.0.2" or "2026.10.26".
 pub async fn latest_version(client: &Client, tool: ToolId) -> Result<String, String> {
-    // Siphon checks only the tools it can install on this system.
-    official_asset(tool)?;
     let name = tool_slug(tool);
-    let url = match tool {
-        ToolId::YtDlp => YT_DLP_LATEST_URL,
-        ToolId::Ffmpeg => FFMPEG_LATEST_URL,
-    };
-    let tag = latest_github_tag(client, url)
-        .await
-        .map_err(|e| format!("Siphon could not check for a newer {name}: {e}."))?;
+    let tag = match tool {
+        ToolId::YtDlp if yt_dlp_names().is_some() => {
+            latest_github_tag(client, YT_DLP_LATEST_URL).await
+        }
+        ToolId::Ffmpeg => match ffmpeg_source() {
+            Some(FfmpegSource::Gyan) => latest_github_tag(client, FFMPEG_LATEST_URL).await,
+            Some(FfmpegSource::MartinRiedl(platform)) => {
+                let url = martin_riedl_build_url(platform)
+                    .await
+                    .map_err(|e| format!("Siphon could not check for a newer {name}: {e}."))?;
+                return martin_riedl_version(&url)
+                    .ok_or_else(|| format!("Siphon could not read the newest {name} version."));
+            }
+            None => return Err(cannot_install(tool)),
+        },
+        ToolId::YtDlp => return Err(cannot_install(tool)),
+    }
+    .map_err(|e| format!("Siphon could not check for a newer {name}: {e}."))?;
     parse_release_version(&tag)
         .ok_or_else(|| format!("Siphon could not read the newest {name} version."))
 }
@@ -334,6 +438,7 @@ fn extract(zip_path: &Path, out: &Path, names: &[String]) -> Result<PathBuf, Str
         let target = out.join(name);
         let tmp = out.join(format!("{name}.new"));
         std::fs::write(&tmp, data).map_err(|e| bad(&e))?;
+        make_executable(&tmp)?;
         if target.exists() {
             std::fs::remove_file(&target).map_err(|e| {
                 format!("Siphon could not replace {}: {e}. Wait until running downloads finish, then try again.", target.display())
@@ -503,6 +608,59 @@ mod tests {
         assert!(!dir.path().join("ffmpeg.download").exists());
     }
 
+    /// The martin-riedl.de layout: the program at the zip root, and "<hash>  ffmpeg.zip".
+    #[tokio::test]
+    async fn installs_executable_from_zip_root() {
+        let zip = zip_with(&[("ffmpeg", b"FFMPEG")]);
+        let sums = format!("{}  ffmpeg.zip\n", sha256_hex(&zip));
+        let server = TestServer::start_routes(
+            vec![
+                ("/b/ffmpeg.zip", "application/zip", zip.clone()),
+                ("/b/ffmpeg.zip.sha256", "text/plain", sums.into_bytes()),
+            ],
+            TestServerOptions::default(),
+        )
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let asset = Asset {
+            url: server.url("/b/ffmpeg.zip"),
+            checksum: Checksum::Single {
+                url: server.url("/b/ffmpeg.zip.sha256"),
+            },
+            payload: Payload::Zip {
+                files: vec!["ffmpeg".into()],
+            },
+        };
+        let path = install(
+            &net::build_client(),
+            ToolId::Ffmpeg,
+            &asset,
+            dir.path(),
+            &|_| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"FFMPEG");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "{mode:o}");
+        }
+    }
+
+    #[test]
+    fn martin_riedl_version_comes_from_the_build_folder() {
+        let url = "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip";
+        assert_eq!(martin_riedl_version(url).as_deref(), Some("9.0.2"));
+        let snapshot = "https://ffmpeg.martin-riedl.de/download/macos/arm64/1794696831_N-128910-g38519047ce/ffmpeg.zip";
+        assert_eq!(martin_riedl_version(snapshot), None);
+        assert_eq!(
+            martin_riedl_version("https://ffmpeg.martin-riedl.de/ffmpeg.zip"),
+            None
+        );
+    }
+
     #[tokio::test]
     async fn missing_file_in_zip_is_an_error() {
         let zip = zip_with(&[("x/bin/ffmpeg.exe", b"F")]);
@@ -536,16 +694,16 @@ mod tests {
         assert!(err.contains("ffprobe.exe"));
     }
 
-    #[test]
-    fn official_assets_point_to_checksummed_files() {
-        let yt = official_asset(ToolId::YtDlp).unwrap();
+    #[tokio::test]
+    async fn official_assets_point_to_checksummed_files() {
+        let yt = official_asset(ToolId::YtDlp).await.unwrap();
         assert!(
             yt.url
                 .starts_with("https://github.com/yt-dlp/yt-dlp/releases/latest/download/")
         );
         assert!(matches!(yt.checksum, Checksum::SumsFile { .. }));
         if cfg!(all(windows, target_arch = "x86_64")) {
-            let ff = official_asset(ToolId::Ffmpeg).unwrap();
+            let ff = official_asset(ToolId::Ffmpeg).await.unwrap();
             assert!(ff.url.starts_with("https://www.gyan.dev/"));
         }
     }
@@ -574,14 +732,14 @@ mod tests {
         assert_eq!(parse_release_version("<html>Not found</html>"), None);
     }
 
-    /// Reads the newest versions from GitHub. Run with `cargo test -- --ignored`.
+    /// Reads the newest versions from GitHub and martin-riedl.de. Run with `cargo test -- --ignored`.
     #[tokio::test]
     #[ignore]
     async fn reads_real_latest_versions() {
         let client = net::build_client();
         let yt = latest_version(&client, ToolId::YtDlp).await.unwrap();
         assert!(yt.starts_with("20"), "{yt}");
-        if cfg!(all(windows, target_arch = "x86_64")) {
+        if can_install(ToolId::Ffmpeg) {
             latest_version(&client, ToolId::Ffmpeg).await.unwrap();
         }
     }
@@ -591,7 +749,7 @@ mod tests {
     #[ignore = "uses the network"]
     async fn installs_real_yt_dlp() {
         let dir = tempfile::tempdir().unwrap();
-        let asset = official_asset(ToolId::YtDlp).unwrap();
+        let asset = official_asset(ToolId::YtDlp).await.unwrap();
         let path = install(
             &net::build_client(),
             ToolId::YtDlp,
@@ -608,5 +766,34 @@ mod tests {
             .unwrap();
         assert!(out.status.success());
         assert!(!String::from_utf8_lossy(&out.stdout).trim().is_empty());
+    }
+
+    /// Downloads the real ffmpeg release (about 30 MB, or 115 MB on Windows) and runs it.
+    /// Run with `cargo test -- --ignored`.
+    #[tokio::test]
+    #[ignore = "uses the network"]
+    async fn installs_real_ffmpeg() {
+        if !can_install(ToolId::Ffmpeg) {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let asset = official_asset(ToolId::Ffmpeg).await.unwrap();
+        let path = install(
+            &net::build_client(),
+            ToolId::Ffmpeg,
+            &asset,
+            dir.path(),
+            &|_| {},
+        )
+        .await
+        .unwrap();
+        let out = crate::tools::command(&path)
+            .arg("-version")
+            .output()
+            .await
+            .unwrap();
+        assert!(out.status.success());
+        let version = String::from_utf8_lossy(&out.stdout);
+        assert!(version.starts_with("ffmpeg version "), "{version}");
     }
 }

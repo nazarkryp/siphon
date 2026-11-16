@@ -39,6 +39,7 @@ const STATUS_PILLS: Record<DownloadStatus, { tone: PillTone; label: string; icon
   downloading: { tone: "downloading", label: "Downloading", icon: <DownloadIcon size="sm" /> },
   paused: { tone: "paused", label: "Paused", icon: <PauseIcon size="sm" /> },
   merging: { tone: "merging", label: "Merging", icon: <LayersIcon size="sm" /> },
+  converting: { tone: "merging", label: "Converting", icon: <LayersIcon size="sm" /> },
   done: { tone: "done", label: "Done", icon: <CheckIcon size="sm" /> },
   failed: { tone: "failed", label: "Failed", icon: <AlertCircleIcon size="sm" /> },
   needsFfmpeg: { tone: "needs-ffmpeg", label: "Needs ffmpeg", icon: <LockIcon size="sm" /> },

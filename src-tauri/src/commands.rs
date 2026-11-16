@@ -33,6 +33,11 @@ pub async fn resolve_link(
 }
 
 #[tauri::command]
+pub fn cancel_prefetch(core: Core_<'_>) {
+    core.cancel_prefetch();
+}
+
+#[tauri::command]
 pub fn add_download(core: Core_<'_>, request: AddRequest) -> CmdResult<Download> {
     core.add_download(request)
 }

@@ -15,7 +15,7 @@ A change is done when all of these are green:
 | `siphon/src-tauri/` | `cargo test --lib`, `cargo clippy --all-targets` (0 warnings), `cargo fmt` |
 
 - `cargo test --lib -- --ignored` also runs the network test, which installs the real yt-dlp release (18 MB).
-- Two tests in `core.rs` use the real ffmpeg on PATH. They skip silently when ffmpeg is missing. Check with `-- --nocapture` that they did not print "skipped".
+- Five tests in `core.rs` use the real ffmpeg on PATH. They skip silently when ffmpeg is missing (the conversion test also when ffmpeg has no VP9 or Opus encoder). Check with `-- --nocapture` that they did not print "skipped".
 - Run the app: `npm run tauri dev` from `siphon/`. It opens a window on the user's PC. Ask the user before you start it.
 
 ## How a download works
@@ -37,7 +37,7 @@ A change is done when all of these are green:
    | `JobSpec` | Engine | Then |
    |---|---|---|
    | one HTTP source | `engine/http.rs` writes `<final>.part` | rename |
-   | HLS, or separate video + audio | `engine/hls.rs` / `engine/http.rs` work in `<folder>/.siphon/<id>/` | ffmpeg `-c copy` into `<stem>.siphon-tmp.<ext>`, then rename |
+   | HLS, separate video + audio, a subtitle, or a compatible format | `engine/hls.rs` / `engine/http.rs` work in `<folder>/.siphon/<id>/` | ffmpeg (copy, or H.264/AAC for a compatible format) into `<stem>.siphon-tmp.<ext>`, then rename |
 
 5. **Finish** (`finish`): the stop reason (`Pause`, `Cancel`, `Remove`) or the result sets the final status. Then the state is saved, the UI gets an event, and `schedule()` runs again.
 
@@ -52,7 +52,8 @@ A change is done when all of these are green:
 
   Tauri maps camelCase argument keys from JavaScript to snake_case Rust arguments.
 - Events: `download-updated` (a full `Download`), `download-removed` `{id}`, `tools-changed`, `clipboard-link` `{url}`, `tool-install-progress`.
-- The window has no system frame (`decorations: false`). A JavaScript call to a window API needs its permission in `src-tauri/capabilities/default.json`. Rust-side plugin calls (dialog, opener, clipboard) need no permission.
+- Window frame: on Windows and Linux the window has no system frame (`decorations: false`), and `WindowBar` draws the caption buttons. On macOS, `tauri.macos.conf.json` replaces the whole window entry (Tauri does not merge arrays, so change both files): native frame, `titleBarStyle: "Overlay"`, and traffic lights centred in the 56 px bar. `WindowBar` then draws no buttons (`lib/platform.ts` `isMac`). The link form sits in `WindowBar`, so `QueueScreen` renders the bar. The loading and error screens render an empty bar. On macOS a `Dialog` with a footer is a sheet (`dialog--sheet`): it hangs from the 56 px bar, has no Close button, and shows the title in the body. So every such dialog needs a Cancel or Close button in its footer.
+- A JavaScript call to a window API needs its permission in `src-tauri/capabilities/default.json`. Rust-side plugin calls (dialog, opener, clipboard) need no permission.
 
 ## Backend invariants
 
@@ -62,16 +63,20 @@ A change is done when all of these are green:
 - **Resume (HTTP)**: the chunks are stored in `downloads.json`. Resume happens only when the server's total size and its ETag/Last-Modified still match. Otherwise the download starts again. A `DlError` with `restart: true` (HTTP 416, or the server stopped accepting ranges) clears the part state, so Retry starts from zero.
 - **Resume (HLS)**: a segment counts as done when its file `seg_NNNNNN.bin` exists. Each segment is written to `.tmp` and then renamed, so a partial file never looks done.
 - **Stopping a job**: set `run.stop` first, then cancel the token. `finish()` reads the reason. A download that is removed while it runs stays in the list with `removed = true`, hidden from the UI, until its job ends and cleans up.
-- **Startup**: `Downloading` and `Merging` entries come back as `Paused`.
+- **Startup**: `Downloading`, `Merging` and `Converting` entries come back as `Paused`.
 - **needsFfmpeg**: `begin()` sets it when `spec.needs_ffmpeg()` is true and ffmpeg is missing. `schedule()` sets it back to `Queued` when ffmpeg is found.
-- **ffmpeg**: it only remuxes (`-c copy`), and it never re-encodes. Build arguments with `core::ffmpeg_args` and run it with `tools::run_ffmpeg`. The temporary output keeps the real extension, because ffmpeg picks the container from it.
+- **ffmpeg**: it remuxes (`-c:v copy -c:a copy`). A text subtitle track is converted to the container's format (`mov_text` for MP4, `webvtt` for WebM, `srt` for MKV). Build arguments with `core::ffmpeg_args` (output part: `tools::output_args`) and run it with `tools::run_ffmpeg`. The temporary output keeps the real extension, because ffmpeg picks the container from it.
+- **Compatible format** (the only re-encode): a video quality that the default player cannot open (VP9, AV1, Opus, WebM, MKV) gets `Quality.unsupportedFormat` and a `Choice.convert` from `resolve::compatible_convert` (yt-dlp and HLS). When `AddRequest.compatibleFormat` is true (Add link checkbox; default from `Settings.compatibleFormat`, on), `add_download` copies it to `JobSpec.convert` and the output becomes `.mp4`. `execute` then sets the `Converting` status and re-encodes only the incompatible track: video to H.264 at `core::h264_bitrate` (twice the source, with a minimum per height, max 20 Mbps), audio to AAC 192k. `tools::h264_encoder` picks the first encoder that passes a test encode (macOS `h264_videotoolbox`, Windows `h264_nvenc`/`h264_qsv`/`h264_amf`, then `libx264`) and caches it per ffmpeg file. An unknown codec counts as compatible. HDR is not tone-mapped. UI texts say "save in a compatible format", not "convert".
 - **Output check**: after each ffmpeg step, `tools::check_output` decodes the first 10 s of the video. More than 20 error lines fail the job. This exists because an ffmpeg development build (`N-124294`, May 2026) wrote MP4 files with a broken H.264 track: the sound played, the video did not, and the file had the full size. Settings warns about development builds (`ToolStatus.devBuild`).
 - **External programs**: start them with `tools::command` (no console window on Windows, killed when dropped).
 - **HLS parsing**: always parse playlists with `engine/hls.rs` `parse_media_playlist`. It fixes an m3u8-rs 6.0.1 bug that drops `#EXT-X-KEY:METHOD=NONE`.
 - **Async commands**: their futures must be `Send`. An `async move` block inside `stream.map(|x| ...)` that borrows data fails with "implementation of `FnOnce` is not general enough". Move the body into a named `async fn` (as in `resolve/hls.rs` `load_variant`).
 - **Out of scope**: live HLS and DRM (SAMPLE-AES, key formats other than identity, yt-dlp `has_drm`) fail with a clear message. Keep it that way.
 - **yt-dlp sources**: Siphon uses only `http`, `https`, `m3u8` and `m3u8_native` formats and skips DASH fragments. yt-dlp URLs expire after some hours, so an old queued job can fail with HTTP 403. Each height gets at most two rows: the best that `resolve::plays_everywhere` accepts (H.264/AAC in MP4, which QuickTime opens) and the best other one (VP9, AV1, Opus, WebM, MKV). The Add link dialog selects the first (best) row; rows that are not `playsEverywhere` show a "Not for QuickTime" note.
-- **Tool installer**: `tools_install.rs` downloads the official builds (yt-dlp from GitHub, ffmpeg from gyan.dev) and checks the SHA-256 from the release's hash file. The old program is replaced only after the check passes. Tools go to `<app data>/tools/`.
+- **Subtitles** (yt-dlp only): `ytdlp.rs` `subtitle_tracks` offers the uploaded tracks and the speech-to-text tracks in the video's own language. It skips machine translations (`tlang=` in the URL), HLS caption playlists, and the duplicate `en` of `en-orig` (same URL). It takes SRT before VTT, because YouTube's speech-to-text VTT repeats each line. Only video choices in MP4, WebM or MKV get the tracks. `add_download` puts the chosen track in `JobSpec.subtitle`. `execute` downloads it in one GET in the merge step (no progress row). MP4 needs three-letter language codes (`ffmpeg` drops `en`), so `iso639_2` converts them. One track per file.
+- **Clipboard watch** (`clipboard.rs` `link_in`): a copied link gives a prompt only when it is a video page on a known video site (`resolve::is_video_page`) or its path ends with an extension in `FILE_EXTENSIONS`. Home pages, profiles, articles and links without an extension give no prompt. Detection makes no network request. A new site in `resolve::VIDEO_SITES` needs its video page paths in `is_video_page`, or it never matches.
+- **Smart prefetch** (`Core::prefetch`): when the clipboard watcher sees a new link, it resolves it in the background, but only when `smartPrefetch` is on, yt-dlp is found, and `resolve::is_video_page` accepts the link. Other links can work only once (password reset, login), so never prefetch them. One prefetch runs at a time. A new copy or Ignore (`cancel_prefetch`) stops it. `resolve_link` without a Referer and User-Agent takes the prefetch for the same URL and resolves again if it failed.
+- **Tool installer**: `tools_install.rs` downloads the official builds (yt-dlp from GitHub; ffmpeg from gyan.dev on 64-bit Windows and from martin-riedl.de on macOS and Linux, x86_64 and arm64) and checks the SHA-256 from the release's hash file. martin-riedl.de answers a GET on `/redirect/latest/...` with a redirect to the newest build (a HEAD gives 404). Siphon reads the target without following it, then downloads the build and `<build>.sha256` from it. The old program is replaced only after the check passes. Tools go to `<app data>/tools/`. `ToolStatus.installable` is false on a system with no source: the UI then shows no Install or Update button, and the update check is skipped.
 - **App data** (`%APPDATA%\dev.siphon.app\`): `settings.json` and `downloads.json`. A file that does not parse is renamed to `*.json.broken`, and Siphon uses the defaults.
 - **User-facing errors**: `DlError { message, hint }` (`net.rs`) becomes `Download.error`. Write the message and the hint for the user, in short plain sentences.
 
@@ -89,7 +94,7 @@ A change is done when all of these are green:
 
 ## Known gaps
 
-- No Browse button for the tool paths. "Detect again" checks only saved paths.
+- No Browse button for the tool paths. The Tools button in Settings ("Check for updates" or "Detect again") checks only saved paths.
 - There is no "retrying" state for segments and no speed for each connection.
 - There is no command to open a web URL or the download folder.
 - The install flow and most screens are not yet tested by hand in the running app.

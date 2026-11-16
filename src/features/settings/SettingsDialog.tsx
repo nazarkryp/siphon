@@ -7,6 +7,7 @@ import { Switch } from "../../components/Switch";
 import { TextField } from "../../components/TextField";
 import { AlertCircleIcon } from "../../components/icons";
 import { errorMessage } from "../../lib/errors";
+import { defaultPlayer } from "../../lib/platform";
 import type { SettingsFocus } from "../../state/dialogs";
 import { useAppData, useStore } from "../../state/store";
 import { useToolUpdates } from "../tools/useToolUpdates";
@@ -23,7 +24,18 @@ export function SettingsDialog({ focus, onClose }: SettingsDialogProps) {
   const { settings, tools } = useAppData();
   const { toolUpdates, check } = useToolUpdates();
   const updates = toolUpdates.status === "done" ? toolUpdates.updates : null;
-  const ids = { downloads: useId(), connections: useId(), clipboard: useId(), clipboardHint: useId() };
+  const ids = {
+    downloads: useId(),
+    connections: useId(),
+    clipboard: useId(),
+    clipboardHint: useId(),
+    prefetch: useId(),
+    prefetchHint: useId(),
+    englishTitles: useId(),
+    englishTitlesHint: useId(),
+    compatible: useId(),
+    compatibleHint: useId(),
+  };
   const folderRef = useRef<HTMLInputElement>(null);
   const ffmpegRef = useRef<HTMLInputElement>(null);
   const ytDlpRef = useRef<HTMLInputElement>(null);
@@ -39,7 +51,7 @@ export function SettingsDialog({ focus, onClose }: SettingsDialogProps) {
     setDraft((current) => ({ ...current, ...patch }));
   }
 
-  // Check once per app run. "Detect again" checks again.
+  // Check once per app run. The Tools button ("Check for updates" or "Detect again") checks again.
   useEffect(() => {
     if (toolUpdates.status === "idle") void check();
   }, [toolUpdates.status, check]);
@@ -176,13 +188,53 @@ export function SettingsDialog({ focus, onClose }: SettingsDialogProps) {
               increaseLabel="More connections"
             />
           </div>
+          <div className="settings__item">
+            <div className="settings__text">
+              <div className="settings__label" id={ids.englishTitles}>
+                English titles
+              </div>
+              <div className="field-hint" id={ids.englishTitlesHint}>
+                For YouTube videos, Siphon uses the English title in the file name when the uploader added
+                one. Otherwise it keeps the original title.
+              </div>
+            </div>
+            <span className="settings__switch-state" aria-hidden="true">
+              {draft.englishTitles ? "On" : "Off"}
+            </span>
+            <Switch
+              checked={draft.englishTitles}
+              onChange={(englishTitles) => update({ englishTitles })}
+              labelledBy={ids.englishTitles}
+              describedBy={ids.englishTitlesHint}
+            />
+          </div>
+          <div className="settings__item">
+            <div className="settings__text">
+              <div className="settings__label" id={ids.compatible}>
+                Save videos in a compatible format
+              </div>
+              <div className="field-hint" id={ids.compatibleHint}>
+                Some videos use a format that {defaultPlayer} cannot open. Siphon changes these videos to
+                H.264 after the download. This takes extra time and makes the file bigger.
+              </div>
+            </div>
+            <span className="settings__switch-state" aria-hidden="true">
+              {draft.compatibleFormat ? "On" : "Off"}
+            </span>
+            <Switch
+              checked={draft.compatibleFormat}
+              onChange={(compatibleFormat) => update({ compatibleFormat })}
+              labelledBy={ids.compatible}
+              describedBy={ids.compatibleHint}
+            />
+          </div>
         </section>
 
         <section className="settings__section">
           <div className="settings__heading-row">
             <h3 className="settings__heading">Tools</h3>
             <Button loading={detecting} onClick={() => void detect()}>
-              Detect again
+              {tools?.ffmpeg.found && tools.ytDlp.found ? "Check for updates" : "Detect again"}
             </Button>
           </div>
           <ToolSetting
@@ -218,7 +270,7 @@ export function SettingsDialog({ focus, onClose }: SettingsDialogProps) {
 
         <section className="settings__section">
           <h3 className="settings__heading">Clipboard</h3>
-          <div className="settings__item settings__item--last">
+          <div className="settings__item">
             <div className="settings__text">
               <div className="settings__label" id={ids.clipboard}>
                 Watch the clipboard
@@ -235,6 +287,27 @@ export function SettingsDialog({ focus, onClose }: SettingsDialogProps) {
               onChange={(clipboardWatch) => update({ clipboardWatch })}
               labelledBy={ids.clipboard}
               describedBy={ids.clipboardHint}
+            />
+          </div>
+          <div className="settings__item settings__item--last">
+            <div className="settings__text">
+              <div className="settings__label" id={ids.prefetch}>
+                Smart prefetch
+              </div>
+              <div className="field-hint" id={ids.prefetchHint}>
+                When you copy a link from YouTube, Vimeo or another video site, Siphon finds its formats right
+                away, so Add opens without a wait. Siphon skips other links, because some links work only once.
+              </div>
+            </div>
+            <span className="settings__switch-state" aria-hidden="true">
+              {draft.clipboardWatch && draft.smartPrefetch ? "On" : "Off"}
+            </span>
+            <Switch
+              checked={draft.clipboardWatch && draft.smartPrefetch}
+              onChange={(smartPrefetch) => update({ smartPrefetch })}
+              labelledBy={ids.prefetch}
+              describedBy={ids.prefetchHint}
+              disabled={!draft.clipboardWatch}
             />
           </div>
         </section>

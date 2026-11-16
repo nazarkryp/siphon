@@ -1,33 +1,66 @@
+/* Three columns. Both side columns have the width of the wider side, so the field fills the
+   space between them and stays in the middle of the window. */
 .window-bar {
-  height: var(--window-bar-height);
+  height: var(--window-toolbar-height);
   flex: none;
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--bar-side) minmax(0, 1fr) var(--bar-side);
+  column-gap: var(--space-4);
   align-items: center;
-  background: var(--color-surface-alt);
+  background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
 }
 
-.window-bar__brand {
-  flex: 1;
+/* macOS: the room for the traffic lights is wider than Settings. */
+.window-bar--mac {
+  --bar-side: var(--window-traffic-lights-width);
+}
+
+/* Windows: Settings, the drag gap and the caption buttons are wider than the logo. */
+.window-bar--caption {
+  --bar-side: calc(var(--control-height) + var(--space-8) + 3 * var(--window-caption-width));
+}
+
+.window-bar__start,
+.window-bar__center,
+.window-bar__end {
   height: 100%;
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  padding-left: 14px;
 }
 
-/* Clicks on the logo and the name must reach the drag region. */
-.window-bar__brand > * {
+.window-bar__center {
+  min-width: 0;
+}
+
+.window-bar--caption .window-bar__start {
+  width: 48px;
+  justify-content: center;
+  justify-self: start;
+}
+
+/* Clicks on the logo must reach the drag region. */
+.window-bar__start > * {
   pointer-events: none;
 }
 
-.window-bar__name {
-  font-size: var(--font-size-md);
-  font-weight: var(--weight-semibold);
+.window-bar__end {
+  justify-content: flex-end;
+  gap: var(--space-8);
 }
 
-.window-bar__button {
-  width: 46px;
+.window-bar--mac .window-bar__end {
+  padding-right: var(--space-5);
+}
+
+.window-bar__captions {
+  height: 100%;
+  flex: none;
+  display: flex;
+}
+
+.window-bar__caption {
+  width: var(--window-caption-width);
   height: 100%;
   border: 0;
   padding: 0;
@@ -36,17 +69,34 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
 }
 
-.window-bar__button:hover {
+.window-bar__caption svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+}
+
+.window-bar__caption:hover {
   background: var(--color-hover);
 }
 
-.window-bar__button--close:hover {
+.window-bar__caption:active {
   background: var(--color-pressed);
 }
 
-.window-bar__button:focus-visible {
+.window-bar__caption--close:hover,
+.window-bar__caption--close:active {
+  background: var(--color-window-close);
+  color: var(--color-on-accent);
+}
+
+.window-bar__caption:focus-visible {
   outline-offset: -2px;
+}
+
+.window-bar[data-focused="false"] .window-bar__caption:not(:hover) {
+  color: var(--color-text-muted);
 }

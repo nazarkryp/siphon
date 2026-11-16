@@ -51,6 +51,7 @@ pub async fn resolve(
             separate_audio: false,
             note: None,
             plays_everywhere: true,
+            unsupported_format: None,
         };
         let choice = Choice {
             kind: DownloadKind::Hls,
@@ -63,11 +64,15 @@ pub async fn resolve(
                     size_hint: None,
                 },
                 audio: None,
+                subtitle: None,
                 duration: Some(plan.duration),
                 encrypted: plan.encrypted,
+                convert: None,
             },
             quality_label: None,
             output_ext: Some("mp4".into()),
+            subtitles: Vec::new(),
+            convert: None,
         };
         let summary = format!(
             "A media playlist: {} segments, {}.",
@@ -83,6 +88,7 @@ pub async fn resolve(
             encrypted: plan.encrypted,
             qualities: vec![quality],
             suggested_file_name: name,
+            subtitles: Vec::new(),
         };
         Ok((stream, vec![choice], summary))
     }
@@ -141,6 +147,19 @@ async fn from_master(
         let bitrate = v.average_bandwidth.unwrap_or(v.bandwidth);
         let label = quality_label(v);
         let separate_audio = l.audio_url.is_some();
+        // Only a variant with a known video codec or a picture size is a video.
+        let (vcodec, acodec) = super::split_codecs(v.codecs.as_deref().unwrap_or(""));
+        let convert = (vcodec.is_some() || v.resolution.is_some())
+            .then(|| {
+                super::compatible_convert(
+                    "mp4",
+                    vcodec,
+                    acodec,
+                    Some(bitrate),
+                    v.resolution.as_ref().map(|r| r.height as u32),
+                )
+            })
+            .flatten();
         qualities.push(Quality {
             id: format!("q{}", i + 1),
             label: label.clone(),
@@ -158,6 +177,7 @@ async fn from_master(
                 "mp4",
                 v.codecs.as_deref().unwrap_or("").split(','),
             ),
+            unsupported_format: convert.as_ref().map(|(_, name)| name.clone()),
         });
         let audio = l.audio_url.as_ref().map(|(u, n)| MediaSource {
             kind: SourceKind::Hls,
@@ -177,11 +197,15 @@ async fn from_master(
                     size_hint: Some((bitrate as f64 / 8.0 * l.duration) as u64),
                 },
                 audio,
+                subtitle: None,
                 duration: Some(l.duration),
                 encrypted: l.encrypted,
+                convert: None,
             },
             quality_label: Some(label),
             output_ext: Some("mp4".into()),
+            subtitles: Vec::new(),
+            convert: convert.map(|(c, _)| c),
         });
     }
 
@@ -201,6 +225,7 @@ async fn from_master(
         encrypted,
         qualities,
         suggested_file_name: name,
+        subtitles: Vec::new(),
     };
     Ok((stream, choices, summary))
 }
